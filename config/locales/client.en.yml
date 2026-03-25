@@ -1,0 +1,6 @@
+en:
+  js:
+    anonymous_post:
+      btn_label: "Anonymously"
+      anonymous_name: "Anonymous"
+      tooltip: "Posted anonymously"

@@ -1,0 +1,18 @@
+plugins:
+  anonymous_post_enabled:
+    default: true
+    client: true
+  anonymous_post_allowed_categories:
+    type: category_list
+    default: ""
+    client: true
+  anonymous_post_reveal_groups:
+    type: group_list
+    default: "1"
+    client: true
+  anonymous_post_ghost_color:
+    default: "#ffb900"
+    client: true
+  anonymous_post_user:
+    default: "anonymous"
+    client: false

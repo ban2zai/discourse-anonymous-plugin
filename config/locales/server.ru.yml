@@ -1,0 +1,10 @@
+ru:
+  site_settings:
+    anonymous_post_enabled: "Включить анонимные публикации"
+    anonymous_post_allowed_categories: "Категории, в которых разрешены анонимные публикации (пусто = отключено)"
+    anonymous_post_reveal_groups: "Группы, которые могут видеть авторов анонимных публикаций"
+    anonymous_post_ghost_color: "Цвет иконки призрака для анонимных публикаций"
+    anonymous_post_user: "Имя пользователя для отображения в анонимных публикациях"
+  js:
+    anonymous_post:
+      anonymous_name: "Аноним"

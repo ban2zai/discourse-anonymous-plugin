@@ -1,0 +1,51 @@
+.anonymous-post-checkbox {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+
+  .checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    font-size: var(--font-down-1);
+    color: var(--primary-medium);
+
+    input[type="checkbox"] {
+      margin: 0;
+    }
+
+    .d-icon {
+      font-size: var(--font-up-1);
+    }
+  }
+}
+
+.is-anonymous-post .anon-post-indicator {
+  margin-left: 5px;
+
+  .d-icon {
+    color: #ffb900;
+    font-size: var(--font-down-1);
+  }
+}
+
+.anon-topic-icon {
+  margin-right: 5px;
+
+  .d-icon {
+    color: #ffb900;
+    font-size: var(--font-down-1);
+  }
+}
+
+body.viewing-anon-profile {
+  #collapsed-info-panel,
+  .new-user-wrapper {
+    display: none !important;
+  }
+
+  .compose-pm {
+    display: none !important;
+  }
+}

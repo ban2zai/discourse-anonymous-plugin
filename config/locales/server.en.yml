@@ -1,0 +1,10 @@
+en:
+  site_settings:
+    anonymous_post_enabled: "Enable anonymous posting"
+    anonymous_post_allowed_categories: "Categories where anonymous posting is allowed (empty = disabled)"
+    anonymous_post_reveal_groups: "Groups that can see real authors of anonymous posts"
+    anonymous_post_ghost_color: "Color for the anonymous post ghost icon"
+    anonymous_post_user: "Username to display for anonymous posts"
+  js:
+    anonymous_post:
+      anonymous_name: "Anonymous"
