@@ -306,6 +306,53 @@ after_initialize do
     end
   end
 
+  # --- TopicView#page_title: anonymize username in browser/crawler <title> tag ---
+  # When navigating to a specific post (/t/slug/id/N), Discourse appends
+  # "- #N by username" to the page title. This leaks the real author for
+  # anonymous posts and anonymous topic owners.
+
+  module ::AnonymousTopicViewExtension
+    def page_title
+      return super unless SiteSetting.anonymous_post_enabled && @post_number > 1
+
+      post = @topic.posts.find_by(post_number: @post_number)
+      return super unless post
+
+      is_anon_post = AnonymousPostHelper.anon_post_by_id?(post.id)
+      is_anon_topic_author =
+        AnonymousPostHelper.anon_topic?(@topic) && post.user_id == @topic.user_id
+
+      return super unless is_anon_post || is_anon_topic_author
+
+      anon_name = AnonymousPostHelper.anon_username
+      title = @topic.title + " - "
+      title +=
+        if @guardian.can_see_post?(post)
+          I18n.t(
+            "inline_oneboxer.topic_page_title_post_number_by_user",
+            post_number: @post_number,
+            username: anon_name,
+          )
+        else
+          I18n.t("inline_oneboxer.topic_page_title_post_number", post_number: @post_number)
+        end
+
+      if SiteSetting.topic_page_title_includes_category
+        if @topic.category_id != SiteSetting.uncategorized_category_id &&
+             @topic.category_id && @topic.category
+          title += " - #{@topic.category.name}"
+        elsif SiteSetting.tagging_enabled && visible_tags.exists?
+          title +=
+            " - #{visible_tags.order("tags.#{Tag.topic_count_column(@guardian)} DESC").first.name}"
+        end
+      end
+
+      title
+    end
+  end
+
+  TopicView.prepend(AnonymousTopicViewExtension)
+
   # --- TopicViewSerializer: topic-level fields ---
 
   add_to_serializer(:topic_view, :is_anonymous_topic) do
