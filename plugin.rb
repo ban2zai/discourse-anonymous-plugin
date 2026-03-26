@@ -632,6 +632,24 @@ after_initialize do
 
   TopicViewSerializer.prepend(AnonymousSolvedJsonExtension)
 
+  # --- discourse-solved: anonymize JSON-LD structured data (QAPage schema) ---
+  # DiscourseSolved::QuestionSchemaSerializer#author uses object.user directly,
+  # bypassing all serializer patches above. We override it to return the anonymous
+  # user when the topic is marked as anonymous.
+
+  if defined?(DiscourseSolved::QuestionSchemaSerializer)
+    DiscourseSolved::QuestionSchemaSerializer.class_eval do
+      def author
+        return(
+          { "@type" => "Person", "name" => object.user&.username, "url" => object.user&.full_url }
+        ) unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_topic?(object)
+
+        anon_name = AnonymousPostHelper.anon_username
+        { "@type" => "Person", "name" => anon_name, "url" => "#{Discourse.base_url}/u/#{anon_name}" }
+      end
+    end
+  end
+
   # --- UserSummary: hide anonymous posts/topics from profile summary ---
 
   module ::AnonymousUserSummaryExtension
