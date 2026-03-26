@@ -1061,21 +1061,58 @@ after_initialize do
         acting_user_id = opts[:user_id]
 
         if SiteSetting.anonymous_post_enabled && guardian && !AnonymousPostHelper.can_reveal?(guardian) && guardian.user&.id != acting_user_id
-          result = result.reject do |action|
-            should_hide = false
+          actions_array = result.to_a
 
-            # Check if the action's post itself is anonymous
-            if action.respond_to?(:post_id) && action.post_id.present?
-              should_hide = AnonymousPostHelper.anon_post_by_id?(action.post_id)
+          # Batch-collect IDs for efficient DB lookups
+          topic_ids = actions_array.filter_map { |a| a.respond_to?(:topic_id) ? a.topic_id&.to_i : nil }.uniq
+          post_ids  = actions_array.filter_map { |a| a.respond_to?(:post_id)  ? a.post_id&.to_i  : nil }.uniq
+
+          # 1. Explicitly anonymous posts
+          explicit_anon_post_ids =
+            post_ids.any? ?
+              PostCustomField.where(post_id: post_ids, name: "is_anonymous_post", value: "1").pluck(:post_id).to_set :
+              Set.new
+
+          # 2. Anonymous topics and their owners
+          anon_topic_ids =
+            topic_ids.any? ?
+              TopicCustomField.where(topic_id: topic_ids, name: "is_anonymous_topic", value: "1").pluck(:topic_id).to_set :
+              Set.new
+
+          anon_topic_owners =
+            anon_topic_ids.any? ?
+              Topic.where(id: anon_topic_ids.to_a).pluck(:id, :user_id).to_h :
+              {}
+
+          # 3. Authors of posts in anonymous topics (to detect when a third party liked
+          #    an anonymous author's post, which would expose the author's identity)
+          post_authors_in_anon_topics =
+            (post_ids.any? && anon_topic_ids.any?) ?
+              Post.where(id: post_ids, topic_id: anon_topic_ids.to_a).pluck(:id, :user_id).to_h :
+              {}
+
+          result = actions_array.reject do |action|
+            post_id  = action.respond_to?(:post_id)  ? action.post_id&.to_i  : nil
+            topic_id = action.respond_to?(:topic_id) ? action.topic_id&.to_i : nil
+
+            # Post is explicitly marked as anonymous
+            next true if post_id && explicit_anon_post_ids.include?(post_id)
+
+            if topic_id && anon_topic_ids.include?(topic_id)
+              owner_id = anon_topic_owners[topic_id]
+
+              # Post is by the anonymous topic owner — reveals their identity
+              # (e.g. third party liked an anonymous post → shows real author in likes-given)
+              if post_id && owner_id
+                post_author_id = post_authors_in_anon_topics[post_id]
+                next true if post_author_id == owner_id
+              end
+
+              # Action is in an anonymous topic owned by the profile user — reveals they own it
+              next true if owner_id == acting_user_id
             end
 
-            # Check if the action is in an anonymous topic owned by the profile user
-            if !should_hide && action.respond_to?(:topic_id) && action.topic_id.present?
-              should_hide = TopicCustomField.exists?(topic_id: action.topic_id, name: "is_anonymous_topic", value: "1") &&
-                            Topic.where(id: action.topic_id, user_id: acting_user_id).exists?
-            end
-
-            should_hide
+            false
           end
         end
 
@@ -1237,47 +1274,58 @@ after_initialize do
   if defined?(DiscourseSolved::SolvedTopicsController)
     module ::AnonymousSolvedTopicsExtension
       def by_user
-        params.require(:username)
-        target_user = User.find_by(username: params[:username])
+        if SiteSetting.anonymous_post_enabled
+          begin
+            target_user = User.find_by(username: params[:username])
 
-        # If viewing someone else's profile and not in reveal groups, filter anonymous posts
-        if target_user && current_user&.id != target_user.id &&
-           !AnonymousPostHelper.can_reveal?(guardian)
-          anon_post_ids = PostCustomField.where(name: "is_anonymous_post", value: "1").pluck(:post_id)
-          if anon_post_ids.present?
-            # Re-implement the query with additional filter
-            user =
-              fetch_user_from_params(
-                include_inactive:
-                  current_user.try(:staff?) || (current_user && SiteSetting.show_inactive_accounts),
-              )
-            raise Discourse::NotFound unless guardian.public_can_see_profiles?
-            raise Discourse::NotFound unless guardian.can_see_profile?(user)
+            # If viewing someone else's profile and not in reveal groups, filter anonymous posts
+            if target_user && current_user&.id != target_user.id &&
+               !AnonymousPostHelper.can_reveal?(guardian)
+              anon_post_ids =
+                PostCustomField.where(name: "is_anonymous_post", value: "1").pluck(:post_id)
 
-            offset = [0, params[:offset].to_i].max
-            limit = params.fetch(:limit, 30).to_i
+              if anon_post_ids.present?
+                user =
+                  fetch_user_from_params(
+                    include_inactive:
+                      current_user.try(:staff?) || (current_user && SiteSetting.show_inactive_accounts),
+                  )
+                raise Discourse::NotFound unless guardian.public_can_see_profiles?
+                raise Discourse::NotFound unless guardian.can_see_profile?(user)
 
-            posts =
-              Post
-                .joins(
-                  "INNER JOIN discourse_solved_solved_topics ON discourse_solved_solved_topics.answer_post_id = posts.id",
-                )
-                .joins(:topic)
-                .joins("LEFT JOIN categories ON categories.id = topics.category_id")
-                .where(user_id: user.id, deleted_at: nil)
-                .where(topics: { archetype: Archetype.default, deleted_at: nil })
-                .where(
-                  "topics.category_id IS NULL OR NOT categories.read_restricted OR topics.category_id IN (:secure_category_ids)",
-                  secure_category_ids: guardian.secure_category_ids,
-                )
-                .where.not(id: anon_post_ids)
-                .includes(:user, topic: %i[category tags])
-                .order("discourse_solved_solved_topics.created_at DESC")
-                .offset(offset)
-                .limit(limit)
+                offset = [0, params[:offset].to_i].max
+                limit = params.fetch(:limit, 30).to_i
 
-            render_serialized(posts, DiscourseSolved::SolvedPostSerializer, root: "user_solved_posts")
-            return
+                solved_table = DiscourseSolved::SolvedTopic.table_name
+
+                posts =
+                  Post
+                    .joins(
+                      "INNER JOIN #{solved_table} ON #{solved_table}.answer_post_id = posts.id",
+                    )
+                    .joins(:topic)
+                    .joins("LEFT JOIN categories ON categories.id = topics.category_id")
+                    .where(user_id: user.id, deleted_at: nil)
+                    .where(topics: { archetype: Archetype.default, deleted_at: nil })
+                    .where(
+                      "topics.category_id IS NULL OR NOT categories.read_restricted OR topics.category_id IN (:secure_category_ids)",
+                      secure_category_ids: guardian.secure_category_ids,
+                    )
+                    .where.not(id: anon_post_ids)
+                    .includes(:user, topic: %i[category tags])
+                    .order("#{solved_table}.created_at DESC")
+                    .offset(offset)
+                    .limit(limit)
+
+                render_serialized(posts, DiscourseSolved::SolvedPostSerializer, root: "user_solved_posts")
+                return
+              end
+            end
+          rescue Discourse::NotFound
+            raise
+          rescue => e
+            Rails.logger.error("[AnonymousPost] solved by_user filter error: #{e.class}: #{e.message}\n#{e.backtrace.first(5).join("\n")}")
+            # Fall through to super on unexpected errors
           end
         end
 
