@@ -697,6 +697,22 @@ after_initialize do
     end
   end
 
+  # DiscourseSolved::AnswerSchemaSerializer#author — the accepted answer post
+  # may itself be an anonymous post, leaking the real solver's username.
+
+  if defined?(DiscourseSolved::AnswerSchemaSerializer)
+    DiscourseSolved::AnswerSchemaSerializer.class_eval do
+      def author
+        return(
+          { "@type" => "Person", "name" => object.user&.username, "url" => object.user&.full_url }
+        ) unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+
+        anon_name = AnonymousPostHelper.anon_username
+        { "@type" => "Person", "name" => anon_name, "url" => "#{Discourse.base_url}/u/#{anon_name}" }
+      end
+    end
+  end
+
   # --- UserSummary: hide anonymous posts/topics from profile summary ---
 
   module ::AnonymousUserSummaryExtension
