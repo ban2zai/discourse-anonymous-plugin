@@ -743,6 +743,47 @@ after_initialize do
     end
   end
 
+  # --- discourse-solved: anonymize MessageBus broadcast on answer accept ---
+  # AcceptAnswer#publish_solution broadcasts accepted_answer_post_info to ALL
+  # topic subscribers via MessageBus, bypassing serializer patches entirely.
+  # We override publish_solution to strip real usernames before broadcasting.
+
+  if defined?(DiscourseSolved::AcceptAnswer)
+    DiscourseSolved::AcceptAnswer.class_eval do
+      private
+
+      alias_method :original_publish_solution, :publish_solution
+
+      def publish_solution(post:, topic:)
+        DiscourseEvent.trigger(:accepted_solution, post)
+
+        answer_info = topic.reload.accepted_answer_post_info
+
+        if SiteSetting.anonymous_post_enabled && answer_info && AnonymousPostHelper.anon_topic?(topic)
+          anon_name = AnonymousPostHelper.anon_username
+          answer_post = topic.solved&.answer_post
+
+          if answer_post && AnonymousPostHelper.anon_post_by_id?(answer_post.id)
+            answer_info = answer_info.merge(username: anon_name, name: nil)
+          end
+
+          if SiteSetting.show_who_marked_solved
+            accepter = topic.solved&.accepter
+            if accepter&.id == topic.user_id
+              answer_info = answer_info.merge(accepter_username: anon_name, accepter_name: nil)
+            end
+          end
+        end
+
+        MessageBus.publish(
+          "/topic/#{topic.id}",
+          { type: :accepted_solution, accepted_answer: answer_info },
+          topic.secure_audience_publish_messages,
+        )
+      end
+    end
+  end
+
   # --- discourse-solved: anonymize "Solved by" display ---
   # discourse-solved prepends TopicViewSerializerExtension which defines
   # accepted_answer without calling super, so we can't intercept it directly.
@@ -815,6 +856,33 @@ after_initialize do
 
         anon_name = AnonymousPostHelper.anon_username
         { "@type" => "Person", "name" => anon_name, "url" => "#{Discourse.base_url}/u/#{anon_name}" }
+      end
+    end
+  end
+
+  # DiscourseSolved::SolvedPostSerializer — defensive patch in case it is ever
+  # called with an anonymous post outside the already-filtered controller.
+
+  if defined?(DiscourseSolved::SolvedPostSerializer)
+    DiscourseSolved::SolvedPostSerializer.class_eval do
+      def username
+        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        AnonymousPostHelper.anon_username
+      end
+
+      def name
+        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        AnonymousPostHelper.anonymous_user_hash[:name]
+      end
+
+      def avatar_template
+        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        AnonymousPostHelper.anonymous_user_hash[:avatar_template]
+      end
+
+      def user_id
+        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        AnonymousPostHelper.anonymous_user_hash[:id]
       end
     end
   end
