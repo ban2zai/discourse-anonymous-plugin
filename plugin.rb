@@ -358,6 +358,60 @@ after_initialize do
 
   TopicView.prepend(AnonymousTopicViewRssExtension)
 
+  # --- TopicList#topics: anonymize dc:creator in list RSS feeds (latest.rss, etc.) ---
+  # list.rss.erb calls rss_creator(topic.user) for each topic in @topic_list.topics.
+  # We wrap anonymous topics in a decorator that overrides #user with the anon user.
+
+  class ::AnonymousRssTopicDecorator < SimpleDelegator
+    def initialize(topic, anon_user)
+      super(topic)
+      @anon_user = anon_user
+    end
+
+    def user
+      @anon_user
+    end
+
+    # Ensure type checks against Topic still pass (e.g. topic.is_a?(Topic))
+    def is_a?(klass)
+      super || __getobj__.is_a?(klass)
+    end
+    alias kind_of? is_a?
+
+    def class
+      __getobj__.class
+    end
+  end
+
+  module ::AnonymousTopicListRssExtension
+    def topics
+      result = super
+      return result unless SiteSetting.anonymous_post_enabled
+
+      topics_array = Array(result)
+      return result if topics_array.empty?
+
+      topic_ids = topics_array.map(&:id)
+      anon_topic_ids =
+        TopicCustomField
+          .where(topic_id: topic_ids, name: "is_anonymous_topic", value: "1")
+          .pluck(:topic_id)
+          .to_set
+
+      return result if anon_topic_ids.empty?
+
+      anon_user =
+        AnonymousPostHelper.anonymous_user ||
+          OpenStruct.new(display_name: AnonymousPostHelper.anon_username)
+
+      topics_array.map do |topic|
+        anon_topic_ids.include?(topic.id) ? AnonymousRssTopicDecorator.new(topic, anon_user) : topic
+      end
+    end
+  end
+
+  TopicList.prepend(AnonymousTopicListRssExtension)
+
   # --- TopicView#page_title: anonymize username in browser/crawler <title> tag ---
   # When navigating to a specific post (/t/slug/id/N), Discourse appends
   # "- #N by username" to the page title. This leaks the real author for
