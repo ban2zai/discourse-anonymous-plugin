@@ -1138,16 +1138,16 @@ after_initialize do
   # --- TopicQuery: hide anonymous topics from "Темы" tab on user profile ---
 
   module ::AnonymousTopicQueryExtension
-    def list_topics_by(user)
-      result = super(user)
+    def list_topics_by(user, *args)
+      result = super(user, *args)
       return result if !SiteSetting.anonymous_post_enabled
-      # If the viewer is not the profile owner and not in reveal groups, exclude anonymous topics
-      if @guardian && !AnonymousPostHelper.can_reveal?(@guardian) && @guardian.user&.id != user.id
-        anon_topic_ids = TopicCustomField.where(name: "is_anonymous_topic", value: "1").pluck(:topic_id)
-        if anon_topic_ids.present?
-          result.topics.reject! { |t| anon_topic_ids.include?(t.id) }
-        end
-      end
+      viewer_id  = @guardian&.user&.id
+      profile_id = user&.id
+      return result if profile_id.nil?
+      return result if viewer_id == profile_id
+      return result if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
+      # is_anonymous_topic is preloaded via TopicList.preloaded_custom_fields — no extra query needed
+      result.topics.reject! { |t| t.custom_fields["is_anonymous_topic"].to_i == 1 }
       result
     end
   end
