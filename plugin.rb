@@ -1069,9 +1069,27 @@ after_initialize do
         if SiteSetting.anonymous_post_enabled && guardian && !AnonymousPostHelper.can_reveal?(guardian) && guardian.user&.id != acting_user_id
           actions_array = result.to_a
 
+          # Helper: UserAction AR model uses target_post_id / target_topic_id,
+          # but some Discourse versions return DB::Result structs aliased as post_id / topic_id.
+          # Support both to be safe.
+          read_post_id  = ->(a) { (a.try(:post_id)  || a.try(:target_post_id)).to_i.then  { |v| v.positive? ? v : nil } }
+          read_topic_id = ->(a) { (a.try(:topic_id) || a.try(:target_topic_id)).to_i.then { |v| v.positive? ? v : nil } }
+
           # Batch-collect IDs for efficient DB lookups
-          topic_ids = actions_array.filter_map { |a| a.respond_to?(:topic_id) ? a.topic_id&.to_i : nil }.uniq
-          post_ids  = actions_array.filter_map { |a| a.respond_to?(:post_id)  ? a.post_id&.to_i  : nil }.uniq
+          topic_ids = actions_array.filter_map { |a| read_topic_id.call(a) }.uniq
+          post_ids  = actions_array.filter_map { |a| read_post_id.call(a)  }.uniq
+
+          if Rails.env.development? || (actions_array.any? && topic_ids.empty? && post_ids.empty?)
+            sample = actions_array.first
+            Rails.logger.info(
+              "[AnonymousPost] stream sample: class=#{sample.class} " \
+              "respond_to(post_id)=#{sample.respond_to?(:post_id)} " \
+              "respond_to(target_post_id)=#{sample.respond_to?(:target_post_id)} " \
+              "post_id=#{sample.try(:post_id).inspect} " \
+              "target_post_id=#{sample.try(:target_post_id).inspect} " \
+              "topic_ids_collected=#{topic_ids.count} post_ids_collected=#{post_ids.count}",
+            )
+          end
 
           # 1. Explicitly anonymous posts
           explicit_anon_post_ids =
@@ -1098,8 +1116,8 @@ after_initialize do
               {}
 
           result = actions_array.reject do |action|
-            post_id  = action.respond_to?(:post_id)  ? action.post_id&.to_i  : nil
-            topic_id = action.respond_to?(:topic_id) ? action.topic_id&.to_i : nil
+            post_id  = read_post_id.call(action)
+            topic_id = read_topic_id.call(action)
 
             # Post is explicitly marked as anonymous
             next true if post_id && explicit_anon_post_ids.include?(post_id)
