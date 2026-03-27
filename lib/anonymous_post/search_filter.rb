@@ -1,34 +1,28 @@
 # frozen_string_literal: true
 
-# --- TopicQuery: hide anonymous topics from "Темы" tab on user profile ---
-
-module ::AnonymousTopicQueryExtension
-  def list_topics_by(user, *args)
-    result = super(user, *args)
-    return result if !SiteSetting.anonymous_post_enabled
-
-    profile_id = user&.id
-    return result if profile_id.nil?
-    return result if @guardian&.user&.id == profile_id
-    return result if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
-
-    topic_ids = result.topics.map(&:id)
-    return result if topic_ids.empty?
-
-    anon_ids = TopicCustomField
-      .where(name: "is_anonymous_topic", value: "1", topic_id: topic_ids)
-      .pluck(:topic_id)
-      .to_set
-
-    result.topics.reject! { |t| anon_ids.include?(t.id) }
-    result
-  end
-end
-
 module AnonymousPost
   module SearchFilter
-    def self.apply!(_plugin)
-      TopicQuery.prepend(AnonymousTopicQueryExtension)
+    def self.apply!(plugin)
+      # --- TopicQuery: hide anonymous topics from "Темы" tab on user profile ---
+      # Uses register_modifier to filter at SQL level, before topics.to_a is called
+      # in create_list. This is more reliable than post-filtering the loaded Array.
+      plugin.register_modifier(:topic_query_create_list_topics) do |topics, options, topic_query|
+        next topics unless SiteSetting.anonymous_post_enabled
+        next topics unless options[:filter] == :user_topics
+
+        guardian = topic_query.instance_variable_get(:@guardian)
+        next topics if guardian.nil?
+
+        profile_user_id = topic_query.instance_variable_get(:@options)[:filtered_to_user]
+        next topics unless profile_user_id
+
+        next topics if guardian.user&.id == profile_user_id
+        next topics if AnonymousPostHelper.can_reveal?(guardian)
+
+        topics.where.not(
+          id: TopicCustomField.where(name: "is_anonymous_topic", value: "1").select(:topic_id),
+        )
+      end
 
       # --- Search: exclude anonymous posts from @username searches ---
 
