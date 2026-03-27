@@ -862,26 +862,32 @@ after_initialize do
 
   # DiscourseSolved::SolvedPostSerializer — defensive patch in case it is ever
   # called with an anonymous post outside the already-filtered controller.
+  # NOTE: SolvedPostSerializer defines these methods directly (not inherited),
+  # so we must use alias_method instead of super.
 
   if defined?(DiscourseSolved::SolvedPostSerializer)
     DiscourseSolved::SolvedPostSerializer.class_eval do
+      alias_method :original_solved_post_username, :username
       def username
-        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        return original_solved_post_username unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
         AnonymousPostHelper.anon_username
       end
 
+      alias_method :original_solved_post_name, :name
       def name
-        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        return original_solved_post_name unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
         AnonymousPostHelper.anonymous_user_hash[:name]
       end
 
+      alias_method :original_solved_post_avatar_template, :avatar_template
       def avatar_template
-        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        return original_solved_post_avatar_template unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
         AnonymousPostHelper.anonymous_user_hash[:avatar_template]
       end
 
+      alias_method :original_solved_post_user_id, :user_id
       def user_id
-        return super unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+        return original_solved_post_user_id unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
         AnonymousPostHelper.anonymous_user_hash[:id]
       end
     end
