@@ -6,13 +6,21 @@ module ::AnonymousTopicQueryExtension
   def list_topics_by(user, *args)
     result = super(user, *args)
     return result if !SiteSetting.anonymous_post_enabled
-    viewer_id  = @guardian&.user&.id
+
     profile_id = user&.id
     return result if profile_id.nil?
-    return result if viewer_id == profile_id
+    return result if @guardian&.user&.id == profile_id
     return result if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
-    # is_anonymous_topic is preloaded via TopicList.preloaded_custom_fields — no extra query needed
-    result.topics.reject! { |t| t.custom_fields["is_anonymous_topic"].to_i == 1 }
+
+    topic_ids = result.topics.map(&:id)
+    return result if topic_ids.empty?
+
+    anon_ids = TopicCustomField
+      .where(name: "is_anonymous_topic", value: "1", topic_id: topic_ids)
+      .pluck(:topic_id)
+      .to_set
+
+    result.topics.reject! { |t| anon_ids.include?(t.id) }
     result
   end
 end
