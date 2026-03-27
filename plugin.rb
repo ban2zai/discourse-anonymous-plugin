@@ -1079,18 +1079,6 @@ after_initialize do
           topic_ids = actions_array.filter_map { |a| read_topic_id.call(a) }.uniq
           post_ids  = actions_array.filter_map { |a| read_post_id.call(a)  }.uniq
 
-          if Rails.env.development? || (actions_array.any? && topic_ids.empty? && post_ids.empty?)
-            sample = actions_array.first
-            Rails.logger.info(
-              "[AnonymousPost] stream sample: class=#{sample.class} " \
-              "respond_to(post_id)=#{sample.respond_to?(:post_id)} " \
-              "respond_to(target_post_id)=#{sample.respond_to?(:target_post_id)} " \
-              "post_id=#{sample.try(:post_id).inspect} " \
-              "target_post_id=#{sample.try(:target_post_id).inspect} " \
-              "topic_ids_collected=#{topic_ids.count} post_ids_collected=#{post_ids.count}",
-            )
-          end
-
           # 1. Explicitly anonymous posts
           explicit_anon_post_ids =
             post_ids.any? ?
