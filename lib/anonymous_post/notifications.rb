@@ -1,25 +1,25 @@
 # frozen_string_literal: true
 
+# --- PostAlerter: anonymize notifications for anonymous posts ---
+
+module ::AnonymousPostAlerterExtension
+  def create_notification(user, notification_type, post, opts = {})
+    if SiteSetting.anonymous_post_enabled && post && AnonymousPostHelper.anon_post?(post)
+      anon = AnonymousPostHelper.anonymous_user
+      if anon
+        opts[:display_username] = anon.username
+        opts[:acting_user_id] = anon.id
+      else
+        opts[:display_username] = AnonymousPostHelper.anon_username
+      end
+    end
+    super(user, notification_type, post, opts)
+  end
+end
+
 module AnonymousPost
   module Notifications
     def self.apply!(plugin)
-      # --- PostAlerter: anonymize notifications for anonymous posts ---
-
-      module ::AnonymousPostAlerterExtension
-        def create_notification(user, notification_type, post, opts = {})
-          if SiteSetting.anonymous_post_enabled && post && AnonymousPostHelper.anon_post?(post)
-            anon = AnonymousPostHelper.anonymous_user
-            if anon
-              opts[:display_username] = anon.username
-              opts[:acting_user_id] = anon.id
-            else
-              opts[:display_username] = AnonymousPostHelper.anon_username
-            end
-          end
-          super(user, notification_type, post, opts)
-        end
-      end
-
       PostAlerter.prepend(AnonymousPostAlerterExtension)
 
       # --- UserCardSerializer: hide message button for anonymous user ---
