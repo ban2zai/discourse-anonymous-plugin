@@ -62,6 +62,61 @@ module AnonymousPost
           end
         end
       end
+
+      # --- UserActionSerializer: anonymize post author in likes-given stream ---
+      # When a user likes an anonymous post, the likes-given activity tab
+      # (/u/[user]/activity/likes-given) serializes the post author's username,
+      # name, avatar_template, and user_id — leaking the real identity.
+      # We replace those fields with anonymous user data when the liked post is
+      # anonymous and the viewer is not the post author themselves.
+
+      UserActionSerializer.class_eval do
+        def username
+          _anon_ua_author[:username] || object.try(:username)
+        end
+
+        def name
+          _anon_ua_author[:name] || object.try(:name)
+        end
+
+        def avatar_template
+          _anon_ua_author[:avatar_template] || object.try(:avatar_template)
+        end
+
+        def user_id
+          _anon_ua_author[:user_id] || object.try(:user_id)
+        end
+
+        private
+
+        # Returns a hash with anonymized author fields when the action's post is anonymous
+        # and the viewer is not the post author. Returns an empty hash otherwise, so the
+        # `|| object.try(:field)` fallback in each method returns the real value.
+        def _anon_ua_author
+          return @_anon_ua_author if defined?(@_anon_ua_author)
+          @_anon_ua_author = _compute_anon_ua_author
+        end
+
+        def _compute_anon_ua_author
+          return {} unless SiteSetting.anonymous_post_enabled
+          return {} if AnonymousPostHelper.can_reveal?(scope)
+
+          post_id = (object.try(:post_id) || object.try(:target_post_id)).to_i
+          return {} unless post_id.positive?
+          return {} unless AnonymousPostHelper.anon_post_by_id?(post_id)
+
+          # Don't anonymize when the viewer is the post author (e.g. WAS_LIKED on own post)
+          return {} if scope.user&.id == object.try(:user_id).to_i
+
+          anon = AnonymousPostHelper.anonymous_user_hash
+          {
+            username:        anon[:username],
+            name:            anon[:name],
+            avatar_template: anon[:avatar_template],
+            user_id:         anon[:id],
+          }
+        end
+      end
     end
   end
 end

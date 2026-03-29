@@ -56,25 +56,28 @@ module AnonymousPost
                 post_id     = read_post_id.call(action)
                 topic_id    = read_topic_id.call(action)
                 action_type = action.try(:action_type).to_i
+                is_like     = action_type == UserAction::LIKE
 
                 # Post is explicitly marked as anonymous.
-                # For the profile owner: only filter LIKE actions (they liked someone else's
-                # anonymous post). Non-LIKE actions are their own anonymous posts — keep visible.
+                # LIKE actions are kept — UserActionSerializer will anonymize the author fields.
+                # Other action types are filtered unless the profile owner is viewing their
+                # own anonymous post activity (e.g. their own anonymous reply in their stream).
                 if post_id && explicit_anon_post_ids.include?(post_id)
-                  next true if !is_owner || action_type == UserAction::LIKE
+                  next false if is_like
+                  next true unless is_owner
+                  next false # owner's own anonymous post activity — keep visible
                 end
 
                 if topic_id && anon_topic_ids.include?(topic_id)
                   owner_id = anon_topic_owners[topic_id]
 
-                  # Post is by the anonymous topic owner — reveals their identity
-                  # (e.g. third party liked an anonymous post → shows real author in likes-given).
-                  # Same owner-exemption logic: allow the owner to see their own post activity,
-                  # but still filter if they liked the post (they aren't the author in that case).
+                  # Post is by the anonymous topic owner — would reveal their identity.
+                  # LIKE actions: keep (anonymized by serializer). Others: filter for non-owners.
                   if post_id && owner_id
                     post_author_id = post_authors_in_anon_topics[post_id]
                     if post_author_id == owner_id
-                      next true if !is_owner || action_type == UserAction::LIKE
+                      next false if is_like
+                      next true unless is_owner
                     end
                   end
 
