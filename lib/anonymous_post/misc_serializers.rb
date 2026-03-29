@@ -71,27 +71,31 @@ module AnonymousPost
       # anonymous and the viewer is not the post author themselves.
 
       UserActionSerializer.class_eval do
+        alias_method :_orig_ua_username, :username
         def username
-          _anon_ua_author[:username] || object.try(:username)
+          _anon_ua_author[:username] || _orig_ua_username
         end
 
+        alias_method :_orig_ua_name, :name
         def name
-          _anon_ua_author[:name] || object.try(:name)
+          _anon_ua_author[:name] || _orig_ua_name
         end
 
+        alias_method :_orig_ua_avatar_template, :avatar_template
         def avatar_template
-          _anon_ua_author[:avatar_template] || object.try(:avatar_template)
+          _anon_ua_author[:avatar_template] || _orig_ua_avatar_template
         end
 
+        alias_method :_orig_ua_user_id, :user_id
         def user_id
-          _anon_ua_author[:user_id] || object.try(:user_id)
+          _anon_ua_author[:user_id] || _orig_ua_user_id
         end
 
         private
 
         # Returns a hash with anonymized author fields when the action's post is anonymous
-        # and the viewer is not the post author. Returns an empty hash otherwise, so the
-        # `|| object.try(:field)` fallback in each method returns the real value.
+        # and the viewer is not the post author. Returns an empty hash otherwise, so each
+        # method falls through to the aliased original.
         def _anon_ua_author
           return @_anon_ua_author if defined?(@_anon_ua_author)
           @_anon_ua_author = _compute_anon_ua_author
