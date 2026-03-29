@@ -15,7 +15,7 @@ module AnonymousPost
 
             can_reveal = guardian && AnonymousPostHelper.can_reveal?(guardian)
             is_owner   = acting_user_id && guardian&.user&.id == acting_user_id
-            if SiteSetting.anonymous_post_enabled && !can_reveal && !is_owner
+            if SiteSetting.anonymous_post_enabled && !can_reveal
               actions_array = result.to_a
 
               # Helper: UserAction AR model uses target_post_id / target_topic_id,
@@ -53,24 +53,34 @@ module AnonymousPost
                   {}
 
               result = actions_array.reject do |action|
-                post_id  = read_post_id.call(action)
-                topic_id = read_topic_id.call(action)
+                post_id     = read_post_id.call(action)
+                topic_id    = read_topic_id.call(action)
+                action_type = action.try(:action_type).to_i
 
-                # Post is explicitly marked as anonymous
-                next true if post_id && explicit_anon_post_ids.include?(post_id)
+                # Post is explicitly marked as anonymous.
+                # For the profile owner: only filter LIKE actions (they liked someone else's
+                # anonymous post). Non-LIKE actions are their own anonymous posts — keep visible.
+                if post_id && explicit_anon_post_ids.include?(post_id)
+                  next true if !is_owner || action_type == UserAction::LIKE
+                end
 
                 if topic_id && anon_topic_ids.include?(topic_id)
                   owner_id = anon_topic_owners[topic_id]
 
                   # Post is by the anonymous topic owner — reveals their identity
-                  # (e.g. third party liked an anonymous post → shows real author in likes-given)
+                  # (e.g. third party liked an anonymous post → shows real author in likes-given).
+                  # Same owner-exemption logic: allow the owner to see their own post activity,
+                  # but still filter if they liked the post (they aren't the author in that case).
                   if post_id && owner_id
                     post_author_id = post_authors_in_anon_topics[post_id]
-                    next true if post_author_id == owner_id
+                    if post_author_id == owner_id
+                      next true if !is_owner || action_type == UserAction::LIKE
+                    end
                   end
 
-                  # Action is in an anonymous topic owned by the profile user — reveals they own it
-                  next true if owner_id == acting_user_id
+                  # Action is in an anonymous topic owned by the profile user — reveals they own it.
+                  # Only apply to non-owners; the owner is allowed to see their own topic activity.
+                  next true if owner_id == acting_user_id && !is_owner
                 end
 
                 false
