@@ -35,6 +35,35 @@ module AnonymousPost
           DiscourseReactions::CustomReactionsController.class_eval do
             private
 
+            alias_method :original_secure_reaction_users!, :secure_reaction_users!
+            def secure_reaction_users!(reaction_users)
+              result = original_secure_reaction_users!(reaction_users)
+
+              return result unless SiteSetting.anonymous_post_enabled
+              return result if AnonymousPostHelper.can_reveal?(guardian)
+
+              # Утечка 2: убрать реакции на анонимные посты.
+              # Иначе страница /u/[user]/activity/reactions раскрывает автора анонимного поста.
+              anon_post_ids =
+                PostCustomField.where(name: "is_anonymous_post", value: "1").select(:post_id)
+              result = result.where.not(post_id: anon_post_ids)
+
+              # Утечка 3: убрать реакции в анонимных топиках.
+              # Иначе публичная страница реакций анонимного автора раскрывает что он активен в топике.
+              if params[:username].present?
+                profile_user = User.find_by(username: params[:username])
+                if profile_user
+                  anon_topic_ids = AnonymousPostHelper.anon_topic_ids_for_user(profile_user.id)
+                  if anon_topic_ids.any?
+                    anon_topic_post_ids = Post.where(topic_id: anon_topic_ids.to_a).select(:id)
+                    result = result.where.not(post_id: anon_topic_post_ids)
+                  end
+                end
+              end
+
+              result
+            end
+
             alias_method :original_get_users, :get_users
             def get_users(reaction)
               return original_get_users(reaction) if !SiteSetting.anonymous_post_enabled

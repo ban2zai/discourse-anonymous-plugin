@@ -4,13 +4,34 @@
 
 module ::AnonymousPostAlerterExtension
   def create_notification(user, notification_type, post, opts = {})
-    if SiteSetting.anonymous_post_enabled && post && AnonymousPostHelper.anon_post?(post)
-      anon = AnonymousPostHelper.anonymous_user
-      if anon
-        opts[:display_username] = anon.username
-        opts[:acting_user_id] = anon.id
-      else
-        opts[:display_username] = AnonymousPostHelper.anon_username
+    if SiteSetting.anonymous_post_enabled && post
+      if AnonymousPostHelper.anon_post?(post)
+        # Пост сам анонимный — анонимизируем отправителя
+        anon = AnonymousPostHelper.anonymous_user
+        if anon
+          opts[:display_username] = anon.username
+          opts[:acting_user_id] = anon.id
+        else
+          opts[:display_username] = AnonymousPostHelper.anon_username
+        end
+      elsif opts[:acting_user_id].present?
+        # acting_user поставил лайк/реакцию, но сам является анонимным автором в этой теме
+        acting_user_id = opts[:acting_user_id]
+        topic = post.topic
+        if topic
+          is_anon_in_topic =
+            AnonymousPostHelper.user_has_anon_posts_in_topic?(acting_user_id, topic.id) ||
+            (AnonymousPostHelper.anon_topic?(topic) && topic.user_id == acting_user_id)
+          if is_anon_in_topic
+            anon = AnonymousPostHelper.anonymous_user
+            if anon
+              opts[:display_username] = anon.username
+              opts[:acting_user_id] = anon.id
+            else
+              opts[:display_username] = AnonymousPostHelper.anon_username
+            end
+          end
+        end
       end
     end
     super(user, notification_type, post, opts)
