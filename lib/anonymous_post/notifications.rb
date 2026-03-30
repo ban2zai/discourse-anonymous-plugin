@@ -14,9 +14,10 @@ module ::AnonymousPostAlerterExtension
         else
           opts[:display_username] = AnonymousPostHelper.anon_username
         end
-      elsif opts[:acting_user_id].present?
-        # acting_user поставил лайк/реакцию, но сам является анонимным автором в этой теме
-        acting_user_id = opts[:acting_user_id]
+      elsif (opts[:acting_user_id] || opts[:user_id]).present?
+        # acting_user поставил лайк/реакцию, но сам является анонимным автором в этой теме.
+        # discourse-reactions передаёт user_id (не acting_user_id) — проверяем оба ключа.
+        acting_user_id = opts[:acting_user_id] || opts[:user_id]
         topic = post.topic
         if topic
           is_anon_in_topic =
@@ -26,9 +27,12 @@ module ::AnonymousPostAlerterExtension
             anon = AnonymousPostHelper.anonymous_user
             if anon
               opts[:display_username] = anon.username
+              opts[:display_name] = anon.name
               opts[:acting_user_id] = anon.id
+              opts[:user_id] = anon.id
             else
               opts[:display_username] = AnonymousPostHelper.anon_username
+              opts[:display_name] = nil
             end
           end
         end

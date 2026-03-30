@@ -31,6 +31,46 @@ module AnonymousPost
 
         # --- discourse-reactions: anonymize users in reactions-users controller endpoint ---
 
+        # --- discourse-reactions: anonymize refresh_notification (called on reaction delete) ---
+        # refresh_notification вызывает Notification.create напрямую, минуя PostAlerter,
+        # поэтому патч create_notification там не срабатывает.
+
+        if defined?(DiscourseReactions::ReactionNotification)
+          DiscourseReactions::ReactionNotification.class_eval do
+            private
+
+            alias_method :original_remaining_reaction_data, :remaining_reaction_data
+            def remaining_reaction_data
+              data = original_remaining_reaction_data
+              return data unless SiteSetting.anonymous_post_enabled
+
+              topic = @post.topic
+              return data unless topic
+
+              # Определяем guardian для проверки прав — используем системного пользователя (нет текущего юзера)
+              # Для refresh_notification нет "текущего" зрителя, поэтому анонимизируем всегда
+              anon_username = AnonymousPostHelper.anon_username
+
+              data.map do |username, name, reaction_value|
+                user = User.find_by(username: username)
+                next [username, name, reaction_value] unless user
+
+                if AnonymousPostHelper.user_has_anon_posts_in_topic?(user.id, topic.id) ||
+                   (AnonymousPostHelper.anon_topic?(topic) && topic.user_id == user.id)
+                  anon = AnonymousPostHelper.anonymous_user
+                  [
+                    anon&.username || anon_username,
+                    anon&.name,
+                    reaction_value,
+                  ]
+                else
+                  [username, name, reaction_value]
+                end
+              end
+            end
+          end
+        end
+
         if defined?(DiscourseReactions::CustomReactionsController)
           DiscourseReactions::CustomReactionsController.class_eval do
             private
