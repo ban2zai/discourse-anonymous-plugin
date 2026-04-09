@@ -32,6 +32,7 @@ after_initialize do
     notifications
     misc_serializers
     onebox_extension
+    username_suggester
     integration/reactions
     integration/solved
   ].each { |f| require_relative "lib/anonymous_post/#{f}" }
@@ -48,6 +49,7 @@ after_initialize do
     AnonymousPost::Notifications,
     AnonymousPost::MiscSerializers,
     AnonymousPost::OneboxExtension,
+    AnonymousPost::UsernameSuggester,
     AnonymousPost::Integration::Reactions,
     AnonymousPost::Integration::Solved,
   ].each { |mod| mod.apply!(self) }
