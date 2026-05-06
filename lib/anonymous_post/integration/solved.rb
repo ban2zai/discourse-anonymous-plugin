@@ -23,6 +23,7 @@ module ::AnonymousSolvedJsonExtension
         anon = AnonymousPostHelper.anonymous_user_hash
         aa[:username] = anon[:username]
         aa[:name] = anon[:name]
+        aa[:avatar_template] = anon[:avatar_template]
       end
     end
 
@@ -150,7 +151,13 @@ module AnonymousPost
                 answer_post = topic.solved&.answer_post
 
                 if answer_post && AnonymousPostHelper.anon_post_by_id?(answer_post.id)
-                  answer_info = answer_info.merge(username: anon_name, name: nil)
+                  anon = AnonymousPostHelper.anonymous_user_hash
+                  answer_info =
+                    answer_info.merge(
+                      username: anon_name,
+                      name: nil,
+                      avatar_template: anon[:avatar_template],
+                    )
                 end
 
                 if SiteSetting.show_who_marked_solved
