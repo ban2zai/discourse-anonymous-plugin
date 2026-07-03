@@ -67,8 +67,37 @@ module ::AnonymousPostHelper
     PostCustomField.exists?(post_id: post_id, name: "is_anonymous_post", value: "1")
   end
 
+  def self.anon_topic_by_id?(topic_id)
+    TopicCustomField.exists?(topic_id: topic_id, name: "is_anonymous_topic", value: "1")
+  end
+
   def self.anon_topic?(topic_obj)
     topic_obj.custom_fields["is_anonymous_topic"].to_i == 1
+  end
+
+  def self.anonymous_topic_owner_post?(post_obj, topic_obj = nil)
+    return false unless post_obj
+
+    topic_obj ||= post_obj.topic if post_obj.respond_to?(:topic)
+    topic_id = topic_obj&.id || post_obj.try(:topic_id)
+    return false if topic_id.blank?
+
+    topic_user_id = topic_obj&.user_id || Topic.where(id: topic_id).pick(:user_id)
+
+    topic_user_id == post_obj.user_id && anon_topic_by_id?(topic_id)
+  end
+
+  def self.anonymous_author_post?(post_obj, topic_obj = nil)
+    return false unless post_obj
+    anon_post_by_id?(post_obj.id) || anonymous_topic_owner_post?(post_obj, topic_obj)
+  end
+
+  def self.hide_real_author?(scope)
+    SiteSetting.anonymous_post_enabled && !(scope && can_reveal?(scope))
+  end
+
+  def self.anonymous_avatar_url(size = 45)
+    (anonymous_user&.avatar_template || ANON_AVATAR_FALLBACK).gsub("{size}", size.to_s)
   end
 
   # Check if the current user can see real authors of anonymous posts

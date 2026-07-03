@@ -34,7 +34,6 @@ module AnonymousPost
             return original unless SiteSetting.anonymous_post_enabled
             return original if AnonymousPostHelper.can_reveal?(scope)
             return original unless AnonymousPostHelper.anon_topic?(topic)
-            return original if scope.user&.id == topic.user_id
             AnonymousPostHelper.anonymous_user_object
           end
         end
@@ -47,7 +46,6 @@ module AnonymousPost
             original = post_obj.user
             return original unless SiteSetting.anonymous_post_enabled
             return original if AnonymousPostHelper.can_reveal?(scope)
-            return original if scope.user&.id == post_obj.user_id
 
             if AnonymousPostHelper.anon_post_by_id?(post_obj.id)
               return AnonymousPostHelper.anonymous_user_object
@@ -67,8 +65,7 @@ module AnonymousPost
       # When a user likes an anonymous post, the likes-given activity tab
       # (/u/[user]/activity/likes-given) serializes the post author's username,
       # name, avatar_template, and user_id — leaking the real identity.
-      # We replace those fields with anonymous user data when the liked post is
-      # anonymous and the viewer is not the post author themselves.
+      # We replace those fields with anonymous user data when the liked post is anonymous.
 
       UserActionSerializer.class_eval do
         alias_method :_orig_ua_username, :username
@@ -94,8 +91,7 @@ module AnonymousPost
         private
 
         # Returns a hash with anonymized author fields when the action's post is anonymous
-        # and the viewer is not the post author. Returns an empty hash otherwise, so each
-        # method falls through to the aliased original.
+        # Returns an empty hash otherwise, so each method falls through to the aliased original.
         def _anon_ua_author
           return @_anon_ua_author if defined?(@_anon_ua_author)
           @_anon_ua_author = _compute_anon_ua_author
@@ -107,10 +103,8 @@ module AnonymousPost
 
           post_id = (object.try(:post_id) || object.try(:target_post_id)).to_i
           return {} unless post_id.positive?
-          return {} unless AnonymousPostHelper.anon_post_by_id?(post_id)
-
-          # Don't anonymize when the viewer is the post author (e.g. WAS_LIKED on own post)
-          return {} if scope.user&.id == object.try(:user_id).to_i
+          post_obj = Post.find_by(id: post_id)
+          return {} unless AnonymousPostHelper.anonymous_author_post?(post_obj)
 
           anon = AnonymousPostHelper.anonymous_user_hash
           {

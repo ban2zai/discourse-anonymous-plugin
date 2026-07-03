@@ -10,9 +10,8 @@ module AnonymousPost
         alias_method :original_basic_username, :username
         def username
           return original_basic_username if !SiteSetting.anonymous_post_enabled
-          if AnonymousPostHelper.anon_post_by_id?(object.id) &&
-             !AnonymousPostHelper.can_reveal?(scope) &&
-             scope.user&.id != object.user_id
+          if AnonymousPostHelper.hide_real_author?(scope) &&
+             AnonymousPostHelper.anonymous_author_post?(object)
             AnonymousPostHelper.anon_username
           else
             original_basic_username
@@ -22,9 +21,8 @@ module AnonymousPost
         alias_method :original_basic_name, :name
         def name
           return original_basic_name if !SiteSetting.anonymous_post_enabled
-          if AnonymousPostHelper.anon_post_by_id?(object.id) &&
-             !AnonymousPostHelper.can_reveal?(scope) &&
-             scope.user&.id != object.user_id
+          if AnonymousPostHelper.hide_real_author?(scope) &&
+             AnonymousPostHelper.anonymous_author_post?(object)
             I18n.t("js.anonymous_post.anonymous_name")
           else
             original_basic_name
@@ -34,9 +32,8 @@ module AnonymousPost
         alias_method :original_basic_avatar_template, :avatar_template
         def avatar_template
           return original_basic_avatar_template if !SiteSetting.anonymous_post_enabled
-          if AnonymousPostHelper.anon_post_by_id?(object.id) &&
-             !AnonymousPostHelper.can_reveal?(scope) &&
-             scope.user&.id != object.user_id
+          if AnonymousPostHelper.hide_real_author?(scope) &&
+             AnonymousPostHelper.anonymous_author_post?(object)
             AnonymousPostHelper.anonymous_user&.avatar_template || AnonymousPostHelper::ANON_AVATAR_FALLBACK
           else
             original_basic_avatar_template
@@ -51,10 +48,8 @@ module AnonymousPost
       end
 
       plugin.add_to_serializer(:post, :display_username) do
-        if SiteSetting.anonymous_post_enabled &&
-           AnonymousPostHelper.anon_post_by_id?(object.id) &&
-           !AnonymousPostHelper.can_reveal?(scope) &&
-           scope.user&.id != object.user_id
+        if AnonymousPostHelper.hide_real_author?(scope) &&
+           AnonymousPostHelper.anonymous_author_post?(object)
           I18n.t("js.anonymous_post.anonymous_name")
         else
           object.user&.name
@@ -62,11 +57,9 @@ module AnonymousPost
       end
 
       plugin.add_to_serializer(:post, :user_id) do
-        if SiteSetting.anonymous_post_enabled &&
-           AnonymousPostHelper.anon_post_by_id?(object.id) &&
-           !AnonymousPostHelper.can_reveal?(scope) &&
-           scope.user&.id != object.user_id
-          AnonymousPostHelper.anonymous_user&.id
+        if AnonymousPostHelper.hide_real_author?(scope) &&
+           AnonymousPostHelper.anonymous_author_post?(object)
+          AnonymousPostHelper.anonymous_user_hash[:id]
         else
           object.user_id
         end
@@ -82,34 +75,59 @@ module AnonymousPost
         def cooked
           html = _original_cooked
           return html || "" if html.blank?
-          return html if !SiteSetting.anonymous_post_enabled
-          return html if AnonymousPostHelper.can_reveal?(scope)
+          return html unless AnonymousPostHelper.hide_real_author?(scope)
 
-          # Anonymize quoted usernames in cooked HTML
-          # Quote format: <aside class="quote" data-username="realuser" data-post="N" data-topic="T">
           anon_name = AnonymousPostHelper.anon_username
+          anon_avatar_url = AnonymousPostHelper.anonymous_avatar_url
 
-          html = html.gsub(%r{<aside[^>]*class="quote"[^>]*>.*?</aside>}m) do |quote_block|
-            data_username = quote_block[/data-username="([^"]+)"/, 1]
-            data_post = quote_block[/data-post="(\d+)"/, 1]
-            data_topic = quote_block[/data-topic="(\d+)"/, 1]
-
-            next quote_block unless data_username && data_post && data_topic
-
-            quoted_post = Post.find_by(topic_id: data_topic.to_i, post_number: data_post.to_i)
-            if quoted_post && AnonymousPostHelper.anon_post_by_id?(quoted_post.id) &&
-               scope.user&.id != quoted_post.user_id
-              result = quote_block.gsub(/data-username="[^"]+"/, "data-username=\"#{anon_name}\"")
-              result = result.gsub(%r{(<div class="title">\s*<img[^>]*>\s*)#{Regexp.escape(data_username)}(\s*:?\s*</div>)}m) do
-                "#{$1}#{anon_name}#{$2}"
-              end
-              result
+          fragment =
+            if defined?(Nokogiri::HTML5)
+              Nokogiri::HTML5.fragment(html)
             else
-              quote_block
+              Nokogiri::HTML.fragment(html)
             end
+          changed = false
+
+          fragment.css("aside.quote").each do |quote|
+            data_username = quote["data-username"]
+            data_post = quote["data-post"].to_i
+            data_topic = quote["data-topic"].to_i
+
+            next if data_username.blank? || data_post <= 0 || data_topic <= 0
+
+            quoted_post = Post.find_by(topic_id: data_topic, post_number: data_post)
+            next unless AnonymousPostHelper.anonymous_author_post?(quoted_post)
+
+            quote["data-username"] = anon_name
+            quote["data-user-card"] = anon_name if quote["data-user-card"].present?
+
+            quote.css("[data-user-card]").each do |node|
+              node["data-user-card"] = anon_name if node["data-user-card"] == data_username
+            end
+
+            title = quote.at_css("div.title")
+            if title
+              title.traverse do |node|
+                next unless node.text?
+                node.content = node.content.gsub(data_username, anon_name)
+              end
+
+              title.css("img").each do |img|
+                img["src"] = anon_avatar_url if img["src"].present?
+                img["alt"] = anon_name if img["alt"].present?
+                img["title"] = anon_name if img["title"].present?
+                img.remove_attribute("srcset")
+              end
+
+              title.css("a").each do |link|
+                link["href"] = "/u/#{anon_name}" if link["href"].to_s.include?("/u/#{data_username}")
+              end
+            end
+
+            changed = true
           end
 
-          html
+          changed ? fragment.to_html : html
         end
       end
 
@@ -120,14 +138,13 @@ module AnonymousPost
         def reply_to_user
           result = original_reply_to_user
           return result if result.nil?
-          return result if !SiteSetting.anonymous_post_enabled
-          return result if AnonymousPostHelper.can_reveal?(scope)
+          return result unless AnonymousPostHelper.hide_real_author?(scope)
 
           reply_post_number = object.reply_to_post_number
           return result unless reply_post_number
 
           reply_post = Post.find_by(topic_id: object.topic_id, post_number: reply_post_number)
-          if reply_post && AnonymousPostHelper.anon_post_by_id?(reply_post.id) && scope.user&.id != reply_post.user_id
+          if AnonymousPostHelper.anonymous_author_post?(reply_post)
             AnonymousPostHelper.anonymous_user_hash
           else
             result
@@ -141,7 +158,9 @@ module AnonymousPost
         alias_method :original_username, :username
         def username
           return original_username if !SiteSetting.anonymous_post_enabled
-          if AnonymousPostHelper.anon_post_by_id?(object.post_id) && !AnonymousPostHelper.can_reveal?(scope)
+          post = Post.find_by(id: object.post_id)
+          if AnonymousPostHelper.hide_real_author?(scope) &&
+             AnonymousPostHelper.anonymous_author_post?(post)
             AnonymousPostHelper.anonymous_user&.username || AnonymousPostHelper.anon_username
           else
             original_username
@@ -151,7 +170,9 @@ module AnonymousPost
         alias_method :original_display_username, :display_username
         def display_username
           return original_display_username if !SiteSetting.anonymous_post_enabled
-          if AnonymousPostHelper.anon_post_by_id?(object.post_id) && !AnonymousPostHelper.can_reveal?(scope)
+          post = Post.find_by(id: object.post_id)
+          if AnonymousPostHelper.hide_real_author?(scope) &&
+             AnonymousPostHelper.anonymous_author_post?(post)
             AnonymousPostHelper.anonymous_user&.name || I18n.t("js.anonymous_post.anonymous_name")
           else
             original_display_username
@@ -161,7 +182,9 @@ module AnonymousPost
         alias_method :original_avatar_template, :avatar_template
         def avatar_template
           return original_avatar_template if !SiteSetting.anonymous_post_enabled
-          if AnonymousPostHelper.anon_post_by_id?(object.post_id) && !AnonymousPostHelper.can_reveal?(scope)
+          post = Post.find_by(id: object.post_id)
+          if AnonymousPostHelper.hide_real_author?(scope) &&
+             AnonymousPostHelper.anonymous_author_post?(post)
             AnonymousPostHelper.anonymous_user&.avatar_template || AnonymousPostHelper::ANON_AVATAR_FALLBACK
           else
             original_avatar_template

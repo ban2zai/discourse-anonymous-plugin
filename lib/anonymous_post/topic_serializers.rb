@@ -66,7 +66,7 @@ module AnonymousPost
       plugin.add_to_serializer(:topic_view, :user_id) do
         topic = object.topic
         if SiteSetting.anonymous_post_enabled &&
-           AnonymousPostHelper.anon_topic?(topic) && !AnonymousPostHelper.can_reveal?(scope) && scope.user&.id != topic.user_id
+           AnonymousPostHelper.anon_topic?(topic) && !AnonymousPostHelper.can_reveal?(scope)
           nil
         else
           topic.user_id
@@ -158,10 +158,10 @@ module AnonymousPost
           return result unless AnonymousPostHelper.anon_topic?(topic)
 
           topic_owner_id = topic.user_id
-          anon = AnonymousPostHelper.anonymous_user
+          anon = AnonymousPostHelper.anonymous_user || AnonymousPostHelper.anonymous_user_object
 
           result.map do |poster|
-            if poster.user && poster.user.id == topic_owner_id && scope.user&.id != poster.user.id && anon
+            if poster.user && poster.user.id == topic_owner_id && anon
               new_poster = poster.dup
               new_poster.user = anon
               new_poster
