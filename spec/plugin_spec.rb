@@ -112,15 +112,21 @@ describe "anonymous post privacy" do
       _topic, first_post, anonymous_reply = anonymous_topic_with_owner_posts
 
       [first_post, anonymous_reply].each do |post|
-        [author, viewer].each do |user|
-          serializer = PostSerializer.new(post, scope: guardian(user), root: false)
+        author_serializer = PostSerializer.new(post, scope: guardian(author), root: false)
 
-          expect(serializer.username).to eq(anon_user.username)
-          expect(serializer.name).to eq("Anonymous")
-          expect(serializer.display_username).to eq("Anonymous")
-          expect(serializer.user_id).to eq(anon_user.id)
-          expect(serializer.avatar_template).to eq(anon_user.avatar_template)
-        end
+        expect(author_serializer.username).to eq(author.username)
+        expect(author_serializer.name).to eq(author.name)
+        expect(author_serializer.display_username).to eq(author.name)
+        expect(author_serializer.user_id).to eq(author.id)
+        expect(author_serializer.avatar_template).to eq(author.avatar_template)
+
+        viewer_serializer = PostSerializer.new(post, scope: guardian(viewer), root: false)
+
+        expect(viewer_serializer.username).to eq(anon_user.username)
+        expect(viewer_serializer.name).to eq("Anonymous")
+        expect(viewer_serializer.display_username).to eq("Anonymous")
+        expect(viewer_serializer.user_id).to eq(anon_user.id)
+        expect(viewer_serializer.avatar_template).to eq(anon_user.avatar_template)
       end
     end
 
@@ -230,11 +236,19 @@ describe "anonymous post privacy" do
     it "anonymizes topic owner fields in topic view details" do
       topic, _first_post, _anonymous_reply = anonymous_topic_with_owner_posts
       details = OpenStruct.new(topic: topic)
-      serializer = stubbed_serializer(TopicViewDetailsSerializer, object: details, scope: guardian(author))
-      allow(serializer).to receive(:original_participants).and_return([author, viewer])
+      author_serializer = stubbed_serializer(TopicViewDetailsSerializer, object: details, scope: guardian(author))
+      allow(author_serializer).to receive(:original_created_by).and_return(author)
+      allow(author_serializer).to receive(:original_participants).and_return([author, viewer])
 
-      created_by = serializer.created_by
-      participants = serializer.participants
+      expect(author_serializer.created_by.username).to eq(author.username)
+      expect(author_serializer.participants.map(&:username)).to include(author.username)
+
+      viewer_serializer = stubbed_serializer(TopicViewDetailsSerializer, object: details, scope: guardian(viewer))
+      allow(viewer_serializer).to receive(:original_created_by).and_return(author)
+      allow(viewer_serializer).to receive(:original_participants).and_return([author, viewer])
+
+      created_by = viewer_serializer.created_by
+      participants = viewer_serializer.participants
       usernames =
         participants.map do |participant|
           participant.respond_to?(:username) ? participant.username : participant[:user].username
@@ -254,24 +268,29 @@ describe "anonymous post privacy" do
       expect(serializer.last_poster.username).to eq(anon_user.username)
     end
 
-    it "hides topic user_id for anonymous topics from the author and regular users" do
+    it "hides topic user_id for anonymous topics from regular users but keeps it for the topic owner" do
       topic, _first_post, _anonymous_reply = anonymous_topic_with_owner_posts
       topic_view = OpenStruct.new(topic: topic)
 
-      [author, viewer].each do |user|
-        serializer = TopicViewSerializer.new(topic_view, scope: guardian(user), root: false)
+      author_serializer = TopicViewSerializer.new(topic_view, scope: guardian(author), root: false)
+      viewer_serializer = TopicViewSerializer.new(topic_view, scope: guardian(viewer), root: false)
 
-        expect(serializer.user_id).to eq(nil)
-      end
+      expect(author_serializer.user_id).to eq(author.id)
+      expect(viewer_serializer.user_id).to eq(nil)
     end
 
     it "anonymizes topic list posters" do
       topic, _first_post, _anonymous_reply = anonymous_topic_with_owner_posts
       poster = OpenStruct.new(user: author)
-      serializer = stubbed_serializer(TopicListItemSerializer, object: topic, scope: guardian(author))
-      allow(serializer).to receive(:original_posters).and_return([poster])
+      author_serializer = stubbed_serializer(TopicListItemSerializer, object: topic, scope: guardian(author))
+      allow(author_serializer).to receive(:original_posters).and_return([poster])
 
-      expect(serializer.posters.first.user.username).to eq(anon_user.username)
+      expect(author_serializer.posters.first.user.username).to eq(author.username)
+
+      viewer_serializer = stubbed_serializer(TopicListItemSerializer, object: topic, scope: guardian(viewer))
+      allow(viewer_serializer).to receive(:original_posters).and_return([poster])
+
+      expect(viewer_serializer.posters.first.user.username).to eq(anon_user.username)
     end
   end
 
@@ -310,6 +329,39 @@ describe "anonymous post privacy" do
       expect(serializer.name).to eq(anon_user.name)
       expect(serializer.avatar_template).to eq(anon_user.avatar_template)
       expect(serializer.user_id).to eq(anon_user.id)
+    end
+
+    it "anonymizes notification data for anonymous topic owner posts" do
+      topic, first_post, _anonymous_reply = anonymous_topic_with_owner_posts
+      notification =
+        OpenStruct.new(
+          topic_id: topic.id,
+          post_number: first_post.post_number,
+        )
+      serializer = stubbed_serializer(NotificationSerializer, object: notification, scope: guardian(viewer))
+      allow(serializer).to receive(:original_anonymous_post_data).and_return(
+        {
+          "display_username" => author.username,
+          "username" => author.username,
+          "original_username" => author.username,
+          "acting_username" => author.username,
+          "display_name" => author.name,
+          "acting_user_id" => author.id,
+          "user_id" => author.id,
+          "topic_id" => topic.id,
+          "post_number" => first_post.post_number,
+        },
+      )
+
+      data = serializer.data
+
+      expect(data["display_username"]).to eq(anon_user.username)
+      expect(data["username"]).to eq(anon_user.username)
+      expect(data["original_username"]).to eq(anon_user.username)
+      expect(data["acting_username"]).to eq(anon_user.username)
+      expect(data["display_name"]).to eq(anon_user.name)
+      expect(data["acting_user_id"]).to eq(anon_user.id)
+      expect(data["user_id"]).to eq(anon_user.id)
     end
   end
 

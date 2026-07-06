@@ -11,6 +11,7 @@ module AnonymousPost
         def username
           return original_basic_username if !SiteSetting.anonymous_post_enabled
           if AnonymousPostHelper.hide_real_author?(scope) &&
+             scope.user&.id != object.user_id &&
              AnonymousPostHelper.anonymous_author_post?(object)
             AnonymousPostHelper.anon_username
           else
@@ -22,6 +23,7 @@ module AnonymousPost
         def name
           return original_basic_name if !SiteSetting.anonymous_post_enabled
           if AnonymousPostHelper.hide_real_author?(scope) &&
+             scope.user&.id != object.user_id &&
              AnonymousPostHelper.anonymous_author_post?(object)
             I18n.t("js.anonymous_post.anonymous_name")
           else
@@ -33,6 +35,7 @@ module AnonymousPost
         def avatar_template
           return original_basic_avatar_template if !SiteSetting.anonymous_post_enabled
           if AnonymousPostHelper.hide_real_author?(scope) &&
+             scope.user&.id != object.user_id &&
              AnonymousPostHelper.anonymous_author_post?(object)
             AnonymousPostHelper.anonymous_user&.avatar_template || AnonymousPostHelper::ANON_AVATAR_FALLBACK
           else
@@ -49,6 +52,7 @@ module AnonymousPost
 
       plugin.add_to_serializer(:post, :display_username) do
         if AnonymousPostHelper.hide_real_author?(scope) &&
+           scope.user&.id != object.user_id &&
            AnonymousPostHelper.anonymous_author_post?(object)
           I18n.t("js.anonymous_post.anonymous_name")
         else
@@ -58,6 +62,7 @@ module AnonymousPost
 
       plugin.add_to_serializer(:post, :user_id) do
         if AnonymousPostHelper.hide_real_author?(scope) &&
+           scope.user&.id != object.user_id &&
            AnonymousPostHelper.anonymous_author_post?(object)
           AnonymousPostHelper.anonymous_user_hash[:id]
         else

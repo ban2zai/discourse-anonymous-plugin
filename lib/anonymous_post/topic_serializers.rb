@@ -66,7 +66,9 @@ module AnonymousPost
       plugin.add_to_serializer(:topic_view, :user_id) do
         topic = object.topic
         if SiteSetting.anonymous_post_enabled &&
-           AnonymousPostHelper.anon_topic?(topic) && !AnonymousPostHelper.can_reveal?(scope)
+           AnonymousPostHelper.anon_topic?(topic) &&
+           !AnonymousPostHelper.can_reveal?(scope) &&
+           scope.user&.id != topic.user_id
           nil
         else
           topic.user_id
@@ -80,7 +82,9 @@ module AnonymousPost
         def created_by
           return original_created_by if !SiteSetting.anonymous_post_enabled
           topic = object.topic
-          if AnonymousPostHelper.anon_topic?(topic) && !AnonymousPostHelper.can_reveal?(scope)
+          if AnonymousPostHelper.anon_topic?(topic) &&
+             !AnonymousPostHelper.can_reveal?(scope) &&
+             scope.user&.id != topic.user_id
             AnonymousPostHelper.anonymous_user_object
           else
             original_created_by
@@ -96,11 +100,14 @@ module AnonymousPost
 
             if AnonymousPostHelper.anon_topic?(topic)
               last_poster_user = topic.last_poster
-              should_anonymize = true if last_poster_user&.id == topic.user_id
+              should_anonymize = true if last_poster_user&.id == topic.user_id && scope.user&.id != topic.user_id
             end
 
             last_post_id = topic.posts.order(post_number: :desc).limit(1).pluck(:id).first
-            should_anonymize = true if last_post_id && AnonymousPostHelper.anon_post_by_id?(last_post_id)
+            if last_post_id
+              last_post_user_id = topic.posts.where(id: last_post_id).pick(:user_id)
+              should_anonymize = true if AnonymousPostHelper.anon_post_by_id?(last_post_id) && scope.user&.id != last_post_user_id
+            end
 
             if should_anonymize
               return AnonymousPostHelper.anonymous_user_object
@@ -116,6 +123,7 @@ module AnonymousPost
           topic = object.topic
           return original_participants if AnonymousPostHelper.can_reveal?(scope)
           return original_participants unless AnonymousPostHelper.anon_topic?(topic)
+          return original_participants if scope.user&.id == topic.user_id
 
           # Since only topic creator can be anonymous, just anonymize their entry
           topic_owner_id = topic.user_id
@@ -156,6 +164,7 @@ module AnonymousPost
 
           topic = object
           return result unless AnonymousPostHelper.anon_topic?(topic)
+          return result if scope.user&.id == topic.user_id
 
           topic_owner_id = topic.user_id
           anon = AnonymousPostHelper.anonymous_user || AnonymousPostHelper.anonymous_user_object
