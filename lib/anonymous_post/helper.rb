@@ -2,6 +2,7 @@
 
 module ::AnonymousPostHelper
   ANON_AVATAR_FALLBACK = "/letter_avatar_proxy/v4/letter/a/b3b5b3/{size}.png"
+  RAW_QUOTE_PATTERN = /\[quote=(["'])(.*?)\1\]/.freeze
 
   def self.anon_username
     SiteSetting.anonymous_post_user.presence || "anonymous"
@@ -98,6 +99,27 @@ module ::AnonymousPostHelper
 
   def self.anonymous_avatar_url(size = 45)
     (anonymous_user&.avatar_template || ANON_AVATAR_FALLBACK).gsub("{size}", size.to_s)
+  end
+
+  def self.anonymize_raw_quotes(text)
+    return text unless text.respond_to?(:include?) && text.respond_to?(:gsub)
+    return text if text.blank? || !text.include?("[quote=")
+
+    text.gsub(RAW_QUOTE_PATTERN) do |match|
+      quote_char = Regexp.last_match(1)
+      header = Regexp.last_match(2)
+      _username, metadata = header.split(",", 2)
+      next match if metadata.blank?
+
+      topic_id = metadata[/\btopic:(\d+)/, 1]
+      post_number = metadata[/\bpost:(\d+)/, 1]
+      next match if topic_id.blank? || post_number.blank?
+
+      quoted_post = Post.find_by(topic_id: topic_id.to_i, post_number: post_number.to_i)
+      next match unless anonymous_author_post?(quoted_post)
+
+      %([quote=#{quote_char}#{anon_username},#{metadata}#{quote_char}])
+    end
   end
 
   # Check if the current user can see real authors of anonymous posts

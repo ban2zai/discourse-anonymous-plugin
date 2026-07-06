@@ -139,6 +139,17 @@ module AnonymousPost
       # --- PostSerializer: anonymize reply-to user for anonymous posts ---
 
       PostSerializer.class_eval do
+        if method_defined?(:raw)
+          alias_method :original_anonymous_post_raw, :raw
+          def raw
+            result = original_anonymous_post_raw
+            return result if result.blank?
+            return result unless AnonymousPostHelper.hide_real_author?(scope)
+
+            AnonymousPostHelper.anonymize_raw_quotes(result)
+          end
+        end
+
         alias_method :original_reply_to_user, :reply_to_user
         def reply_to_user
           result = original_reply_to_user

@@ -6,6 +6,7 @@ module ::AnonymousNotificationData
   USERNAME_KEYS = %w[display_username username original_username acting_username].freeze
   NAME_KEYS = %w[display_name name original_name acting_name].freeze
   USER_ID_KEYS = %w[acting_user_id user_id original_user_id].freeze
+  TEXT_KEYS = %w[excerpt original_excerpt post_excerpt raw cooked message body text description].freeze
 
   def self.set_key(data, key, value)
     string_key = key.to_s
@@ -24,6 +25,7 @@ module ::AnonymousNotificationData
 
   def self.apply!(data)
     anon = AnonymousPostHelper.anonymous_user_hash
+    anonymize_text_fields!(data)
 
     USERNAME_KEYS.each do |key|
       set_key(data, key, anon[:username]) if data.key?(key) || data.key?(key.to_sym)
@@ -42,6 +44,25 @@ module ::AnonymousNotificationData
     set_key(data, "acting_user_id", anon[:id])
     set_key(data, "user_id", anon[:id])
     data
+  end
+
+  def self.anonymize_text_fields!(data)
+    changed = false
+
+    TEXT_KEYS.each do |key|
+      [key, key.to_sym].each do |candidate|
+        next unless data.key?(candidate) && data[candidate].present?
+
+        original = data[candidate].to_s
+        anonymized = AnonymousPostHelper.anonymize_raw_quotes(original)
+        next if anonymized == original
+
+        data[candidate] = anonymized
+        changed = true
+      end
+    end
+
+    changed
   end
 
   def self.anonymous_context?(post, actor_user_id = nil)
@@ -124,10 +145,13 @@ module AnonymousPost
 
             return result unless parsed.is_a?(Hash)
 
+            text_changed = AnonymousNotificationData.anonymize_text_fields!(parsed)
             post = AnonymousNotificationData.post_from_notification(object, parsed)
             actor_user_id = AnonymousNotificationData.actor_user_id(parsed)
 
-            return result unless AnonymousNotificationData.anonymous_context?(post, actor_user_id)
+            unless AnonymousNotificationData.anonymous_context?(post, actor_user_id)
+              return text_changed ? (was_json ? parsed.to_json : parsed) : result
+            end
 
             AnonymousNotificationData.apply!(parsed)
             was_json ? parsed.to_json : parsed

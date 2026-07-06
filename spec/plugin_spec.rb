@@ -68,6 +68,10 @@ describe "anonymous post privacy" do
     HTML
   end
 
+  def quote_raw(topic, quoted_post)
+    %([quote="#{author.username}, post:#{quoted_post.post_number}, topic:#{topic.id}"]Quoted text[/quote])
+  end
+
   def serialize_cooked(post, user)
     PostSerializer.new(post, scope: guardian(user), root: false).cooked
   end
@@ -104,6 +108,28 @@ describe "anonymous post privacy" do
       expect(AnonymousPostHelper.anonymous_author_post?(normal_reply)).to eq(false)
       expect(AnonymousPostHelper.hide_real_author?(guardian(viewer))).to eq(true)
       expect(AnonymousPostHelper.hide_real_author?(guardian(admin))).to eq(false)
+    end
+
+    it "anonymizes raw markdown quotes that point to anonymous author posts" do
+      topic, first_post, anonymous_reply = anonymous_topic_with_owner_posts
+      raw =
+        [
+          quote_raw(topic, first_post),
+          %([quote="#{author.username}, post:#{anonymous_reply.post_number}, topic:#{topic.id}, full:true"]Reply[/quote]),
+        ].join("\n")
+
+      anonymized = AnonymousPostHelper.anonymize_raw_quotes(raw)
+
+      expect(anonymized).to include(%([quote="#{anon_user.username}, post:#{first_post.post_number}, topic:#{topic.id}"]))
+      expect(anonymized).to include(%([quote="#{anon_user.username}, post:#{anonymous_reply.post_number}, topic:#{topic.id}, full:true"]))
+      expect(anonymized).not_to include(author.username)
+    end
+
+    it "does not rewrite raw markdown quotes that point to non-anonymous posts" do
+      topic = Fabricate(:topic, user: author, category: category)
+      quoted_post = fabricate_post(topic: topic, user: author, post_number: 1)
+
+      expect(AnonymousPostHelper.anonymize_raw_quotes(quote_raw(topic, quoted_post))).to include(author.username)
     end
   end
 
@@ -199,6 +225,26 @@ describe "anonymous post privacy" do
         )
 
       expect_author_visible(serialize_cooked(quoting_post, viewer))
+    end
+
+    it "anonymizes raw quote usernames when raw post content is serialized" do
+      skip "PostSerializer#raw is not available in this Discourse version" unless PostSerializer.method_defined?(:raw)
+
+      topic, first_post, _anonymous_reply = anonymous_topic_with_owner_posts
+      quoting_post =
+        fabricate_post(
+          topic: topic,
+          user: author,
+          post_number: 3,
+        )
+      quoting_post.update_columns(raw: "#{quote_raw(topic, first_post)} Reply text")
+
+      [author, viewer].each do |user|
+        raw = PostSerializer.new(quoting_post, scope: guardian(user), root: false).raw
+
+        expect(raw).to include(%([quote="#{anon_user.username}, post:#{first_post.post_number}, topic:#{topic.id}"]))
+        expect(raw).not_to include(author.username)
+      end
     end
 
     it "anonymizes reply_to_user for anonymous author posts" do
@@ -350,6 +396,7 @@ describe "anonymous post privacy" do
           "user_id" => author.id,
           "topic_id" => topic.id,
           "post_number" => first_post.post_number,
+          "excerpt" => "#{quote_raw(topic, first_post)} Reply text",
         },
       )
 
@@ -362,6 +409,33 @@ describe "anonymous post privacy" do
       expect(data["display_name"]).to eq(anon_user.name)
       expect(data["acting_user_id"]).to eq(anon_user.id)
       expect(data["user_id"]).to eq(anon_user.id)
+      expect(data["excerpt"]).to include(%([quote="#{anon_user.username}, post:#{first_post.post_number}, topic:#{topic.id}"]))
+      expect(data["excerpt"]).not_to include(author.username)
+    end
+
+    it "anonymizes raw quote usernames in notification text even when the notification post is not anonymous" do
+      topic, first_post, _anonymous_reply = anonymous_topic_with_owner_posts
+      normal_reply = fabricate_post(topic: topic, user: viewer, post_number: 3)
+      notification =
+        OpenStruct.new(
+          topic_id: topic.id,
+          post_number: normal_reply.post_number,
+        )
+      serializer = stubbed_serializer(NotificationSerializer, object: notification, scope: guardian(viewer))
+      allow(serializer).to receive(:original_anonymous_post_data).and_return(
+        {
+          "display_username" => viewer.username,
+          "topic_id" => topic.id,
+          "post_number" => normal_reply.post_number,
+          "excerpt" => "#{quote_raw(topic, first_post)} Normal reply",
+        },
+      )
+
+      data = serializer.data
+
+      expect(data["display_username"]).to eq(viewer.username)
+      expect(data["excerpt"]).to include(%([quote="#{anon_user.username}, post:#{first_post.post_number}, topic:#{topic.id}"]))
+      expect(data["excerpt"]).not_to include(author.username)
     end
   end
 
