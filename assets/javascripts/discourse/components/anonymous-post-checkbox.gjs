@@ -1,5 +1,6 @@
 import Component from "@glimmer/component";
 import { tracked } from "@glimmer/tracking";
+import { getOwner } from "@ember/application";
 import { on } from "@ember/modifier";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
@@ -12,6 +13,12 @@ export default class AnonymousPostCheckbox extends Component {
 
   @tracked checked = false;
   _initialized = false;
+
+  leavePresence() {
+    getOwner(this)
+      ?.lookup("service:composer-presence-manager")
+      ?.leave?.();
+  }
 
   get shouldRender() {
     if (!this.siteSettings.anonymous_post_enabled) {
@@ -52,6 +59,7 @@ export default class AnonymousPostCheckbox extends Component {
         this._initialized = true;
         this.checked = true;
         model.set("is_anonymous_post", 1);
+        this.leavePresence();
       }
       return true;
     }
@@ -65,6 +73,10 @@ export default class AnonymousPostCheckbox extends Component {
     const model = this.args.outletArgs?.model;
     if (model) {
       model.set("is_anonymous_post", this.checked ? 1 : 0);
+    }
+
+    if (this.checked) {
+      this.leavePresence();
     }
   }
 

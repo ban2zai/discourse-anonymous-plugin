@@ -110,6 +110,32 @@ describe "anonymous post privacy" do
       expect(AnonymousPostHelper.hide_real_author?(guardian(admin))).to eq(false)
     end
 
+    it "memoizes anonymous author classification on the post object" do
+      _topic, _first_post, anonymous_reply = anonymous_topic_with_owner_posts
+
+      expect(anonymous_reply.instance_variable_defined?(:@anonymous_post_author)).to eq(false)
+      expect(AnonymousPostHelper.anonymous_author_post?(anonymous_reply)).to eq(true)
+      expect(anonymous_reply.instance_variable_get(:@anonymous_post_author)).to eq(true)
+    end
+
+    it "classifies raw quote targets in one batch" do
+      topic, first_post, anonymous_reply = anonymous_topic_with_owner_posts
+      normal_reply = fabricate_post(topic: topic, user: viewer, post_number: 3)
+
+      targets =
+        AnonymousPostHelper.anon_quote_targets(
+          [
+            [topic.id, first_post.post_number],
+            [topic.id, anonymous_reply.post_number],
+            [topic.id, normal_reply.post_number],
+          ],
+        )
+
+      expect(targets).to include([topic.id, first_post.post_number])
+      expect(targets).to include([topic.id, anonymous_reply.post_number])
+      expect(targets).not_to include([topic.id, normal_reply.post_number])
+    end
+
     it "anonymizes raw markdown quotes that point to anonymous author posts" do
       topic, first_post, anonymous_reply = anonymous_topic_with_owner_posts
       raw =
@@ -377,6 +403,45 @@ describe "anonymous post privacy" do
       expect(serializer.user_id).to eq(anon_user.id)
     end
 
+    it "writes symbol keys for fresh notification opts" do
+      data = {}
+
+      AnonymousNotificationData.apply!(data, key_style: :symbol)
+
+      expect(data[:display_username]).to eq(anon_user.username)
+      expect(data[:display_name]).to eq(anon_user.name)
+      expect(data[:acting_user_id]).to eq(anon_user.id)
+      expect(data[:user_id]).to eq(anon_user.id)
+      expect(data).not_to have_key("display_username")
+    end
+
+    it "writes string keys for parsed notification JSON" do
+      data = {}
+
+      AnonymousNotificationData.apply!(data, key_style: :string)
+
+      expect(data["display_username"]).to eq(anon_user.username)
+      expect(data["display_name"]).to eq(anon_user.name)
+      expect(data["acting_user_id"]).to eq(anon_user.id)
+      expect(data["user_id"]).to eq(anon_user.id)
+      expect(data).not_to have_key(:display_username)
+    end
+
+    it "anonymizes live notification alert payloads before push delivery" do
+      topic, first_post, _anonymous_reply = anonymous_topic_with_owner_posts
+      payload = {
+        topic_id: topic.id,
+        post_number: first_post.post_number,
+        username: author.username,
+        excerpt: "Reply text",
+      }
+
+      DiscourseEvent.trigger(:pre_notification_alert, viewer, payload)
+
+      expect(payload[:username]).to eq(anon_user.username)
+      expect(payload[:display_username]).to eq(anon_user.username)
+    end
+
     it "anonymizes notification data for anonymous topic owner posts" do
       topic, first_post, _anonymous_reply = anonymous_topic_with_owner_posts
       notification =
@@ -439,12 +504,53 @@ describe "anonymous post privacy" do
     end
   end
 
+  describe "webhook serializers" do
+    it "forces anonymous post author masking for webhook post payloads" do
+      skip "WebHookPostSerializer is not available in this Discourse version" unless defined?(WebHookPostSerializer)
+
+      _topic, first_post, _anonymous_reply = anonymous_topic_with_owner_posts
+      serializer = WebHookPostSerializer.new(first_post, scope: guardian(Discourse.system_user), root: false)
+
+      expect(serializer.username).to eq(anon_user.username)
+      expect(serializer.name).to eq(anon_user.name)
+      expect(serializer.user_id).to eq(anon_user.id)
+      expect(serializer.avatar_template).to eq(anon_user.avatar_template)
+    end
+
+    it "patches at least one webhook topic field when the serializer exists" do
+      skip "WebHookTopicViewSerializer is not available in this Discourse version" unless defined?(WebHookTopicViewSerializer)
+
+      patched_methods =
+        %i[
+          original_anonymous_webhook_created_by
+          original_anonymous_webhook_last_poster
+          original_anonymous_webhook_user_id
+        ].select { |method_name| WebHookTopicViewSerializer.method_defined?(method_name) }
+
+      expect(patched_methods).not_to be_empty
+    end
+  end
+
   describe "RSS decorators and page titles" do
     it "returns anonymous users from RSS post decorators" do
       _topic, _first_post, anonymous_reply = anonymous_topic_with_owner_posts
       decorator = AnonymousRssPostDecorator.new(anonymous_reply, anon_user)
 
       expect(decorator.user.username).to eq(anon_user.username)
+    end
+
+    it "anonymizes cooked quote bodies in RSS post decorators" do
+      topic, first_post, _anonymous_reply = anonymous_topic_with_owner_posts
+      quoting_post =
+        fabricate_post(
+          topic: topic,
+          user: viewer,
+          post_number: 3,
+          cooked: quote_html(topic, first_post),
+        )
+      decorator = AnonymousRssPostDecorator.new(quoting_post)
+
+      expect_no_author_leak(decorator.cooked)
     end
 
     it "returns anonymous users from RSS topic decorators" do

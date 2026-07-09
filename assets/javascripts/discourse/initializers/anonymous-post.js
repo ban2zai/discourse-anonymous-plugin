@@ -16,6 +16,25 @@ export default apiInitializer("0.4.0", (api) => {
   styleEl.textContent = `.anon-post-indicator .d-icon, .anon-topic-icon .d-icon { color: ${ghostColor} !important; }`;
   document.head.appendChild(styleEl);
 
+  if (api.container.hasRegistration?.("service:composer-presence-manager")) {
+    api.modifyClass("service:composer-presence-manager", {
+      pluginId: "discourse-anonymous-plugin",
+
+      notifyState() {
+        const model = this.composer?.model || this.model || this.currentComposer?.model;
+        const isAnonymousPost =
+          model?.is_anonymous_post || model?.get?.("is_anonymous_post");
+
+        if (isAnonymousPost) {
+          this.leave?.();
+          return;
+        }
+
+        return this._super?.(...arguments);
+      },
+    });
+  }
+
   api.addPostClassesCallback((attrs) => {
     return attrs.is_anonymous_post ? ["is-anonymous-post"] : [];
   });

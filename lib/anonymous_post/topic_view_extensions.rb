@@ -6,13 +6,17 @@
 # that returns the anonymous user instead, using a single batch DB query.
 
 class ::AnonymousRssPostDecorator < SimpleDelegator
-  def initialize(post, anon_user)
+  def initialize(post, anon_user = nil)
     super(post)
     @anon_user = anon_user
   end
 
   def user
-    @anon_user
+    @anon_user || __getobj__.user
+  end
+
+  def cooked
+    AnonymousPostHelper.anonymize_cooked_quotes(__getobj__.cooked)
   end
 end
 
@@ -24,25 +28,20 @@ module ::AnonymousTopicViewRssExtension
     posts_array = posts.to_a
     return posts_array if posts_array.empty?
 
-    post_ids = posts_array.map(&:id)
-    anon_post_ids =
-      PostCustomField
-        .where(post_id: post_ids, name: "is_anonymous_post", value: "1")
-        .pluck(:post_id)
-        .to_set
+    anon_post_ids = AnonymousPostHelper.anonymous_author_post_ids(posts_array, topic)
+    has_quote_candidates = posts_array.any? { |post| post.cooked.to_s.include?("aside") }
 
-    is_anon_topic = AnonymousPostHelper.anon_topic?(topic)
-    topic_owner_id = topic.user_id
-
-    return posts_array unless anon_post_ids.any? || is_anon_topic
+    return posts_array if anon_post_ids.empty? && !has_quote_candidates
 
     anon_user =
       AnonymousPostHelper.anonymous_user ||
-        OpenStruct.new(display_name: AnonymousPostHelper.anon_username)
+        AnonymousPostHelper.anonymous_user_object
 
     posts_array.map do |post|
-      if anon_post_ids.include?(post.id) || (is_anon_topic && post.user_id == topic_owner_id)
+      if anon_post_ids.include?(post.id)
         AnonymousRssPostDecorator.new(post, anon_user)
+      elsif post.cooked.to_s.include?("aside")
+        AnonymousRssPostDecorator.new(post)
       else
         post
       end

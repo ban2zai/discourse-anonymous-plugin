@@ -8,7 +8,7 @@ module ::AnonymousNotificationData
   USER_ID_KEYS = %w[acting_user_id user_id original_user_id].freeze
   TEXT_KEYS = %w[excerpt original_excerpt post_excerpt raw cooked message body text description].freeze
 
-  def self.set_key(data, key, value)
+  def self.set_key(data, key, value, key_style = nil)
     string_key = key.to_s
     symbol_key = string_key.to_sym
 
@@ -16,6 +16,10 @@ module ::AnonymousNotificationData
       data[string_key] = value
     elsif data.key?(symbol_key)
       data[symbol_key] = value
+    elsif key_style == :symbol
+      data[symbol_key] = value
+    elsif key_style == :string
+      data[string_key] = value
     elsif data.keys.any? { |k| k.is_a?(Symbol) }
       data[symbol_key] = value
     else
@@ -23,26 +27,26 @@ module ::AnonymousNotificationData
     end
   end
 
-  def self.apply!(data)
+  def self.apply!(data, key_style: nil)
     anon = AnonymousPostHelper.anonymous_user_hash
     anonymize_text_fields!(data)
 
     USERNAME_KEYS.each do |key|
-      set_key(data, key, anon[:username]) if data.key?(key) || data.key?(key.to_sym)
+      set_key(data, key, anon[:username], key_style) if data.key?(key) || data.key?(key.to_sym)
     end
 
     NAME_KEYS.each do |key|
-      set_key(data, key, anon[:name]) if data.key?(key) || data.key?(key.to_sym)
+      set_key(data, key, anon[:name], key_style) if data.key?(key) || data.key?(key.to_sym)
     end
 
     USER_ID_KEYS.each do |key|
-      set_key(data, key, anon[:id]) if data.key?(key) || data.key?(key.to_sym)
+      set_key(data, key, anon[:id], key_style) if data.key?(key) || data.key?(key.to_sym)
     end
 
-    set_key(data, "display_username", anon[:username])
-    set_key(data, "display_name", anon[:name])
-    set_key(data, "acting_user_id", anon[:id])
-    set_key(data, "user_id", anon[:id])
+    set_key(data, "display_username", anon[:username], key_style)
+    set_key(data, "display_name", anon[:name], key_style)
+    set_key(data, "acting_user_id", anon[:id], key_style)
+    set_key(data, "user_id", anon[:id], key_style)
     data
   end
 
@@ -54,7 +58,12 @@ module ::AnonymousNotificationData
         next unless data.key?(candidate) && data[candidate].present?
 
         original = data[candidate].to_s
-        anonymized = AnonymousPostHelper.anonymize_raw_quotes(original)
+        anonymized =
+          if original.include?("<aside")
+            AnonymousPostHelper.anonymize_cooked_quotes(original)
+          else
+            AnonymousPostHelper.anonymize_raw_quotes(original)
+          end
         next if anonymized == original
 
         data[candidate] = anonymized
@@ -63,6 +72,31 @@ module ::AnonymousNotificationData
     end
 
     changed
+  end
+
+  def self.payload_key_style(data)
+    data.keys.any? { |key| key.is_a?(Symbol) } ? :symbol : :string
+  end
+
+  def self.excerpt_from_cooked(html)
+    return nil if html.blank?
+
+    max_length = SiteSetting.respond_to?(:post_excerpt_maxlength) ? SiteSetting.post_excerpt_maxlength : 300
+
+    if defined?(ExcerptParser)
+      begin
+        return ExcerptParser.get_excerpt(html, max_length, text_entities: true)
+      rescue ArgumentError
+        return ExcerptParser.get_excerpt(html, max_length)
+      end
+    end
+
+    return PrettyText.excerpt(html, max_length) if defined?(PrettyText)
+
+    nil
+  rescue StandardError => e
+    Rails.logger.warn("[AnonymousPost] notification excerpt anonymization failed: #{e.message}")
+    nil
   end
 
   def self.anonymous_context?(post, actor_user_id = nil)
@@ -100,7 +134,7 @@ module ::AnonymousPostAlerterExtension
     if SiteSetting.anonymous_post_enabled && post
       if AnonymousPostHelper.anonymous_author_post?(post)
         # Пост сам анонимный — анонимизируем отправителя
-        AnonymousNotificationData.apply!(opts)
+        AnonymousNotificationData.apply!(opts, key_style: :symbol)
       elsif (opts[:acting_user_id] || opts[:user_id]).present?
         # acting_user поставил лайк/реакцию, но сам является анонимным автором в этой теме.
         # discourse-reactions передаёт user_id (не acting_user_id) — проверяем оба ключа.
@@ -111,7 +145,7 @@ module ::AnonymousPostAlerterExtension
             AnonymousPostHelper.user_has_anon_posts_in_topic?(acting_user_id, topic.id) ||
             (AnonymousPostHelper.anon_topic?(topic) && topic.user_id == acting_user_id)
           if is_anon_in_topic
-            AnonymousNotificationData.apply!(opts)
+            AnonymousNotificationData.apply!(opts, key_style: :symbol)
           end
         end
       end
@@ -153,7 +187,8 @@ module AnonymousPost
               return text_changed ? (was_json ? parsed.to_json : parsed) : result
             end
 
-            AnonymousNotificationData.apply!(parsed)
+            key_style = was_json ? :string : AnonymousNotificationData.payload_key_style(parsed)
+            AnonymousNotificationData.apply!(parsed, key_style: key_style)
             was_json ? parsed.to_json : parsed
           rescue JSON::ParserError
             result
@@ -174,6 +209,34 @@ module AnonymousPost
           end
           original_can_send_private_message_to_user
         end
+      end
+
+      plugin.on(:pre_notification_alert) do |_user, payload|
+        next unless SiteSetting.anonymous_post_enabled
+        next unless payload.is_a?(Hash)
+
+        topic_id = payload[:topic_id] || payload["topic_id"]
+        post_number = payload[:post_number] || payload["post_number"]
+        next if topic_id.blank? || post_number.blank?
+
+        post = Post.find_by(topic_id: topic_id.to_i, post_number: post_number.to_i)
+        next unless post
+
+        key_style = AnonymousNotificationData.payload_key_style(payload)
+
+        if AnonymousPostHelper.anonymous_author_post?(post)
+          AnonymousNotificationData.set_key(payload, "username", AnonymousPostHelper.anon_username, key_style)
+          AnonymousNotificationData.set_key(payload, "display_username", AnonymousPostHelper.anon_username, key_style)
+        end
+
+        next unless (payload[:excerpt] || payload["excerpt"]).present?
+        next unless post.cooked.to_s.include?("aside")
+
+        anonymized_cooked = AnonymousPostHelper.anonymize_cooked_quotes(post.cooked)
+        next if anonymized_cooked == post.cooked
+
+        excerpt = AnonymousNotificationData.excerpt_from_cooked(anonymized_cooked)
+        AnonymousNotificationData.set_key(payload, "excerpt", excerpt, key_style) if excerpt.present?
       end
 
       # --- Flag PM: redirect "send message" for anonymous posts to moderators ---

@@ -7,7 +7,7 @@ module ::AnonymousUserSummaryExtension
     return results if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     return results if @guardian&.user&.id == @user.id
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
-    anon_post_ids = PostCustomField.where(name: "is_anonymous_post", value: "1").pluck(:post_id).to_set
+    anon_post_ids = anonymous_post_ids_for_summary_user
     results.reject { |r| anon_post_ids.include?(r.id) || anon_ids.include?(r.topic_id) }
   end
 
@@ -25,7 +25,7 @@ module ::AnonymousUserSummaryExtension
     return results if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     return results if @guardian&.user&.id == @user.id
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
-    anon_post_ids = PostCustomField.where(name: "is_anonymous_post", value: "1").pluck(:post_id).to_set
+    anon_post_ids = anonymous_post_ids_for_summary_user
     results.reject { |r| anon_post_ids.include?(r.id) || anon_ids.include?(r.topic_id) }
   end
 
@@ -154,6 +154,18 @@ module ::AnonymousUserSummaryExtension
   rescue => e
     Rails.logger.warn("[AnonymousPost] top_categories filter error: #{e.message}")
     super
+  end
+
+  private
+
+  def anonymous_post_ids_for_summary_user
+    @anonymous_post_ids_for_summary_user ||=
+      PostCustomField
+        .joins(:post)
+        .where(name: "is_anonymous_post", value: "1")
+        .where(posts: { user_id: @user.id })
+        .pluck(:post_id)
+        .to_set
   end
 end
 

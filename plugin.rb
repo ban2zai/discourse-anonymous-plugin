@@ -18,12 +18,25 @@ after_initialize do
   register_topic_custom_field_type("is_anonymous_topic", :integer)
 
   # Preload custom fields to avoid N+1 queries (HasCustomFields::NotPreloadedError)
-  TopicList.preloaded_custom_fields << "is_anonymous_topic"
+  TopicList.preloaded_custom_fields << "is_anonymous_topic" unless TopicList.preloaded_custom_fields.include?("is_anonymous_topic")
+
+  if TopicView.respond_to?(:default_post_custom_fields)
+    TopicView.default_post_custom_fields << "is_anonymous_post" unless TopicView.default_post_custom_fields.include?("is_anonymous_post")
+  elsif TopicView.respond_to?(:add_post_custom_fields_allowlister)
+    TopicView.add_post_custom_fields_allowlister { |_user| ["is_anonymous_post"] }
+  elsif TopicView.respond_to?(:on_preload)
+    TopicView.on_preload do |topic_view|
+      Post.preload_custom_fields(topic_view.posts, ["is_anonymous_post"]) if topic_view.respond_to?(:posts)
+    end
+  end
 
   %w[
     helper
     post_creation_handler
     post_serializers
+    raw_endpoints
+    crawler_extension
+    webhook_serializers
     topic_view_extensions
     topic_serializers
     user_summary_extension
@@ -41,6 +54,9 @@ after_initialize do
 
   [
     AnonymousPost::PostSerializers,
+    AnonymousPost::RawEndpoints,
+    AnonymousPost::CrawlerExtension,
+    AnonymousPost::WebhookSerializers,
     AnonymousPost::TopicViewExtensions,
     AnonymousPost::TopicSerializers,
     AnonymousPost::UserSummaryExtension,
