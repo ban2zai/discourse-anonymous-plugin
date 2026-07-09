@@ -60,7 +60,7 @@ module AnonymousPost
       # --- TopicViewSerializer: topic-level fields ---
 
       plugin.add_to_serializer(:topic_view, :is_anonymous_topic) do
-        object.topic.custom_fields["is_anonymous_topic"].to_i
+        AnonymousPostHelper.anon_topic?(object.topic) ? 1 : 0
       end
 
       plugin.add_to_serializer(:topic_view, :user_id) do
@@ -150,7 +150,7 @@ module AnonymousPost
       # --- TopicListItemSerializer: is_anonymous_topic flag for topic list ---
 
       plugin.add_to_serializer(:topic_list_item, :is_anonymous_topic) do
-        object.custom_fields["is_anonymous_topic"].to_i
+        AnonymousPostHelper.anon_topic?(object) ? 1 : 0
       end
 
       # --- TopicListItemSerializer: posters in topic list ---

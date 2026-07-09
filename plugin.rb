@@ -18,7 +18,17 @@ after_initialize do
   register_topic_custom_field_type("is_anonymous_topic", :integer)
 
   # Preload custom fields to avoid N+1 queries (HasCustomFields::NotPreloadedError)
-  TopicList.preloaded_custom_fields << "is_anonymous_topic" unless TopicList.preloaded_custom_fields.include?("is_anonymous_topic")
+  if TopicList.respond_to?(:preloaded_custom_fields)
+    TopicList.preloaded_custom_fields << "is_anonymous_topic" unless TopicList.preloaded_custom_fields.include?("is_anonymous_topic")
+  end
+
+  if TopicList.respond_to?(:on_preload)
+    TopicList.on_preload do |*args|
+      topic_list = args.find { |arg| arg.respond_to?(:topics) }
+      topics = topic_list&.topics || args.find { |arg| arg.is_a?(Array) } || []
+      Topic.preload_custom_fields(topics, ["is_anonymous_topic"]) if topics.present? && Topic.respond_to?(:preload_custom_fields)
+    end
+  end
 
   if TopicView.respond_to?(:default_post_custom_fields)
     TopicView.default_post_custom_fields << "is_anonymous_post" unless TopicView.default_post_custom_fields.include?("is_anonymous_post")

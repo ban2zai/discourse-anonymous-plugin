@@ -351,6 +351,17 @@ describe "anonymous post privacy" do
       expect(viewer_serializer.user_id).to eq(nil)
     end
 
+    it "serializes anonymous topic flags without requiring preloaded custom fields" do
+      topic, _first_post, _anonymous_reply = anonymous_topic_with_owner_posts
+      topic_view = OpenStruct.new(topic: topic)
+
+      allow(topic).to receive(:custom_field_preloaded?).with("is_anonymous_topic").and_return(false)
+      allow(topic).to receive(:custom_fields).and_raise(StandardError, "custom fields were not preloaded")
+
+      expect(TopicViewSerializer.new(topic_view, scope: guardian(viewer), root: false).is_anonymous_topic).to eq(1)
+      expect(TopicListItemSerializer.new(topic, scope: guardian(viewer), root: false).is_anonymous_topic).to eq(1)
+    end
+
     it "anonymizes topic list posters" do
       topic, _first_post, _anonymous_reply = anonymous_topic_with_owner_posts
       poster = OpenStruct.new(user: author)
