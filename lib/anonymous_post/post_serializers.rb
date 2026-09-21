@@ -105,7 +105,7 @@ module AnonymousPost
           reply_post_number = object.reply_to_post_number
           return result unless reply_post_number
 
-          reply_post = Post.find_by(topic_id: object.topic_id, post_number: reply_post_number)
+          reply_post = Post.with_deleted.find_by(topic_id: object.topic_id, post_number: reply_post_number)
           if AnonymousPostHelper.anonymous_author_post?(reply_post)
             AnonymousPostHelper.anonymous_user_hash
           else

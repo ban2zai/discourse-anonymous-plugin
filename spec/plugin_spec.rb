@@ -293,6 +293,36 @@ describe "anonymous post privacy" do
       end
     end
 
+    it "скрывает автора удалённого анонимного поста в reply_to_user, сохраняя доступ админа" do
+      topic, _first_post, replied_to_post = anonymous_topic_with_owner_posts
+      reply =
+        fabricate_post(
+          topic: topic,
+          user: viewer,
+          post_number: 3,
+          reply_to_post_number: replied_to_post.post_number,
+        )
+      replied_to_post.update_columns(deleted_at: Time.current)
+
+      expect(Post.find_by(id: replied_to_post.id)).to be_nil
+      expect(Post.with_deleted.find_by(id: replied_to_post.id)).to be_present
+
+      original_user = {
+        id: author.id,
+        username: author.username,
+        name: author.name,
+        avatar_template: author.avatar_template,
+      }
+
+      [viewer, admin].each do |user|
+        serializer = PostSerializer.new(reply, scope: guardian(user), root: false)
+        allow(serializer).to receive(:original_reply_to_user).and_return(original_user)
+
+        expected = user == admin ? original_user : AnonymousPostHelper.anonymous_user_hash
+        expect(serializer.reply_to_user).to eq(expected)
+      end
+    end
+
     it "anonymizes post revision author fields" do
       _topic, _first_post, anonymous_reply = anonymous_topic_with_owner_posts
       revision = OpenStruct.new(post_id: anonymous_reply.id)
