@@ -69,6 +69,55 @@ describe "anonymous post leak endpoints", type: :request do
     expect(response.body).not_to include(author.name)
   end
 
+  describe "Адресат ответа" do
+    let(:topic) { Fabricate(:topic, user: author, category: category) }
+    let(:target) { fabricate_post(topic: topic, user: author, post_number: 1) }
+    let(:reply) do
+      fabricate_post(topic: topic, user: viewer, post_number: 2).tap do |post|
+        post.update_columns(reply_to_post_number: target.post_number, reply_to_user_id: author.id)
+      end
+    end
+
+    it "скрывает автора удаленного анонимного поста в адресате ответа" do
+      mark_anonymous_post(target)
+      reply_id = reply.id
+      target.trash!(admin)
+
+      sign_in(viewer)
+      get "/posts/#{reply_id}.json"
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.fetch("reply_to_user")).to include(
+        "id" => anon_user.id, "username" => anon_user.username, "avatar_template" => anon_user.avatar_template,
+      )
+
+      sign_in(admin)
+      get "/posts/#{reply_id}.json"
+      expect(response.parsed_body.fetch("reply_to_user")).to include("id" => author.id, "username" => author.username)
+    end
+
+    it "маскирует адресата-владельца анонимной темы, когда исходный пост отсутствует" do
+      mark_anonymous_topic(topic)
+      reply.update_columns(reply_to_post_number: 99)
+      sign_in(viewer)
+
+      get "/posts/#{reply.id}.json"
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.fetch("reply_to_user")).to include("id" => anon_user.id, "username" => anon_user.username)
+    end
+
+    it "сохраняет адресата обычного ответа, пока исходный пост подтверждает его" do
+      sign_in(viewer)
+      get "/posts/#{reply.id}.json"
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.fetch("reply_to_user")).to include("id" => author.id, "username" => author.username)
+
+      reply.update_columns(reply_to_post_number: nil)
+      get "/posts/#{reply.id}.json"
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["reply_to_user"]).to be_nil
+    end
+  end
+
   describe "raw markdown endpoints" do
     it "anonymizes quote headers on /raw/:topic_id/:post_number for regular users" do
       topic, _first_post, quoting_post = anonymous_topic_with_quote

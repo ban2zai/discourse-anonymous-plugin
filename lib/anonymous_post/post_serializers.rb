@@ -92,18 +92,23 @@ module AnonymousPost
 
         alias_method :original_reply_to_user, :reply_to_user
         def reply_to_user
-          result = original_reply_to_user
-          return result if result.nil?
-          return result unless AnonymousPostHelper.hide_real_author?(scope)
+          return original_reply_to_user unless AnonymousPostHelper.hide_real_author?(scope)
 
-          reply_post_number = object.reply_to_post_number
-          return result unless reply_post_number
+          recipient_id = object.reply_to_user_id
+          return unless recipient_id
 
-          reply_post = Post.find_by(topic_id: object.topic_id, post_number: reply_post_number)
-          if AnonymousPostHelper.anonymous_author_post?(reply_post)
-            AnonymousPostHelper.anonymous_user_hash
-          else
-            result
+          if (post_number = object.reply_to_post_number)
+            target = Post.with_deleted.find_by(topic_id: object.topic_id, post_number: post_number)
+            return AnonymousPostHelper.anonymous_user_hash if AnonymousPostHelper.anonymous_author_post?(target)
+            return original_reply_to_user if target&.user_id == recipient_id
+          end
+
+          # У старого ответа может сохраниться адресат без исходного поста.
+          topic = object.topic
+          if topic &&
+             ((topic.user_id == recipient_id && AnonymousPostHelper.anon_topic?(topic)) ||
+               AnonymousPostHelper.user_has_anon_posts_in_topic?(recipient_id, topic.id))
+            return AnonymousPostHelper.anonymous_user_hash
           end
         end
       end
