@@ -9,8 +9,6 @@
 
 module ::AnonymousOneboxer
   def local_topic_html(url, route, opts)
-    return super unless SiteSetting.anonymous_post_enabled
-
     topic_obj = local_topic(url, route, opts)
     return super unless topic_obj && AnonymousPostHelper.anon_topic?(topic_obj)
 
@@ -71,7 +69,6 @@ module AnonymousPost
           private
 
           def bypass_onebox_cache_for_anonymous_topics
-            return unless SiteSetting.anonymous_post_enabled
             return if params[:url].blank?
 
             begin

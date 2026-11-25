@@ -15,7 +15,7 @@ module AnonymousPost
 
             can_reveal = guardian && AnonymousPostHelper.can_reveal?(guardian)
             is_owner   = acting_user_id && guardian&.user&.id == acting_user_id
-            if SiteSetting.anonymous_post_enabled && !can_reveal
+            if !can_reveal
               actions_array = result.to_a
 
               # Helper: UserAction AR model uses target_post_id / target_topic_id,

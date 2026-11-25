@@ -4,10 +4,7 @@ module ::AnonymousPostsControllerExtension
   private
 
   def markdown(post)
-    if SiteSetting.anonymous_post_enabled &&
-       post &&
-       guardian.can_see?(post) &&
-       AnonymousPostHelper.hide_real_author?(guardian)
+    if post && guardian.can_see?(post) && AnonymousPostHelper.hide_real_author?(guardian)
       render plain: AnonymousPostHelper.anonymize_raw_quotes(post.raw)
     else
       super

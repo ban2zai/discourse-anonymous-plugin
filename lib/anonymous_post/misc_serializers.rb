@@ -7,7 +7,6 @@
 module ::AnonymousUserSearchExtension
   def search
     results = super
-    return results unless SiteSetting.anonymous_post_enabled
     return results unless @topic_id
 
     topic = @topic || Topic.find_by(id: @topic_id)
@@ -31,7 +30,6 @@ module AnonymousPost
         UserTopicBookmarkSerializer.class_eval do
           def bookmarkable_user
             original = first_post.user
-            return original unless SiteSetting.anonymous_post_enabled
             return original if AnonymousPostHelper.can_reveal?(scope)
             return original unless AnonymousPostHelper.anon_topic?(topic)
             AnonymousPostHelper.anonymous_user_object
@@ -44,7 +42,6 @@ module AnonymousPost
           def bookmarkable_user
             post_obj = post
             original = post_obj.user
-            return original unless SiteSetting.anonymous_post_enabled
             return original if AnonymousPostHelper.can_reveal?(scope)
 
             if AnonymousPostHelper.anon_post_by_id?(post_obj.id)
@@ -98,7 +95,6 @@ module AnonymousPost
         end
 
         def _compute_anon_ua_author
-          return {} unless SiteSetting.anonymous_post_enabled
           return {} if AnonymousPostHelper.can_reveal?(scope)
 
           post_id = (object.try(:post_id) || object.try(:target_post_id)).to_i

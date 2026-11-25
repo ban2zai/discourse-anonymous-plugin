@@ -1,118 +1,129 @@
 # frozen_string_literal: true
 
-# --- discourse-solved: anonymize "Solved by" display ---
-# discourse-solved prepends TopicViewSerializerExtension which defines
-# accepted_answer without calling super, so we can't intercept it directly.
-# Instead, we wrap as_json to post-process the serialized output.
+module ::AnonymousSolvedAnswersExtension
+  def serialize(topic, guardian, broadcast: false)
+    answers = super(topic, guardian)
+    return unless answers
 
-module ::AnonymousSolvedJsonExtension
-  def as_json(*)
-    result = super
-    return result if !SiteSetting.anonymous_post_enabled
-    aa = result[:accepted_answer]
-    return result unless aa.is_a?(Hash)
-    return result if AnonymousPostHelper.can_reveal?(scope)
+    return answers unless broadcast || AnonymousPostHelper.hide_real_author?(guardian)
 
-    topic = object.topic
-    return result unless AnonymousPostHelper.anon_topic?(topic)
+    topic_answers = topic.topic_answers.index_by(&:answer_post_id)
+    if broadcast
+      # Получатели рассылки могут видеть тему, но не все ее посты.
+      visible_types = Topic.visible_post_types
+      answers.select! do |answer|
+        post = topic_answers.fetch(answer[:id]).post
+        !post.hidden? && !post.trashed? && visible_types.include?(post.post_type)
+      end
+      return if answers.empty?
+    end
+    posts = answers.map { |answer| topic_answers.fetch(answer[:id]).post }
+    anonymous_ids = AnonymousPostHelper.anonymous_author_post_ids(posts, topic)
+    anonymous_topic = AnonymousPostHelper.anon_topic?(topic)
+    anon = AnonymousPostHelper.anonymous_user_hash
 
-    # Anonymize solver if their answer post is anonymous
-    if aa[:username].present?
-      answer_post = topic.solved&.answer_post rescue nil
-      if answer_post && AnonymousPostHelper.anon_post_by_id?(answer_post.id)
-        anon = AnonymousPostHelper.anonymous_user_hash
-        aa[:username] = anon[:username]
-        aa[:name] = anon[:name]
-        aa[:avatar_template] = anon[:avatar_template]
+    answers.each do |answer|
+      topic_answer = topic_answers.fetch(answer[:id])
+      if anonymous_ids.include?(topic_answer.answer_post_id)
+        %i[username name avatar_template].each { |key| answer[key] = anon[key] if answer.key?(key) }
+      end
+
+      accepter_id = topic_answer.accepter&.id || topic.user_id
+      if anonymous_topic && accepter_id == topic.user_id
+        answer[:accepter_username] = anon[:username] if answer.key?(:accepter_username)
+        answer[:accepter_name] = anon[:name] if answer.key?(:accepter_name)
+      end
+
+      if broadcast && answer.key?(:cooked)
+        answer[:cooked] = AnonymousPostHelper.anonymize_cooked_quotes(answer[:cooked])
       end
     end
-
-    # Anonymize accepter if they are the topic owner
-    if aa[:accepter_username].present?
-      accepter = topic.solved&.accepter rescue nil
-      if accepter&.id == topic.user_id
-        anon = AnonymousPostHelper.anonymous_user_hash
-        aa[:accepter_username] = anon[:username]
-        aa[:accepter_name] = anon[:name]
-      end
-    end
-
-    result
   end
 end
 
-# --- discourse-solved: hide anonymous solved posts from "Решённые" tab ---
-
 module ::AnonymousSolvedTopicsExtension
   def by_user
-    if SiteSetting.anonymous_post_enabled
-      begin
-        target_user = User.find_by(username: params[:username])
+    return super unless AnonymousPostHelper.hide_real_author?(guardian)
 
-        # If viewing someone else's profile and not in reveal groups, filter anonymous posts
-        if target_user && current_user&.id != target_user.id &&
-           !AnonymousPostHelper.can_reveal?(guardian)
-          anon_post_ids =
-            PostCustomField.where(name: "is_anonymous_post", value: "1").pluck(:post_id)
+    params.require(:username)
+    user =
+      fetch_user_from_params(
+        include_inactive:
+          current_user.try(:staff?) || (current_user && SiteSetting.show_inactive_accounts),
+      )
+    return super if current_user&.id == user.id
 
-          if anon_post_ids.present?
-            user =
-              fetch_user_from_params(
-                include_inactive:
-                  current_user.try(:staff?) || (current_user && SiteSetting.show_inactive_accounts),
-              )
-            raise Discourse::NotFound unless guardian.public_can_see_profiles?
-            raise Discourse::NotFound unless guardian.can_see_profile?(user)
+    raise Discourse::NotFound unless guardian.public_can_see_profiles?
+    raise Discourse::NotFound unless guardian.can_see_profile?(user)
+    raise Discourse::NotFound unless guardian.can_see_user_actions?(user)
 
-            offset = [0, params[:offset].to_i].max
-            limit = params.fetch(:limit, 30).to_i
+    anon_post_ids = PostCustomField.where(name: "is_anonymous_post", value: "1").select(:post_id)
+    anon_topic_ids = TopicCustomField.where(name: "is_anonymous_topic", value: "1").select(:topic_id)
+    anon_owned_topics = Topic.where(user_id: user.id, id: anon_topic_ids).select(:id)
 
-            solved_table = DiscourseSolved::SolvedTopic.table_name
+    posts =
+      Post
+        .joins(
+          "INNER JOIN discourse_solved_topic_answers ON discourse_solved_topic_answers.answer_post_id = posts.id",
+          "INNER JOIN discourse_solved_solved_topics ON discourse_solved_solved_topics.id = discourse_solved_topic_answers.solved_topic_id",
+        )
+        .joins(:topic)
+        .joins("LEFT JOIN categories ON categories.id = topics.category_id")
+        .where(user_id: user.id, deleted_at: nil)
+        .where(topics: { archetype: Archetype.default, deleted_at: nil })
+        .where(
+          "topics.category_id IS NULL OR NOT categories.read_restricted OR topics.category_id IN (:secure_category_ids)",
+          secure_category_ids: guardian.secure_category_ids,
+        )
+        .where.not(id: anon_post_ids)
+        .where.not(topic_id: anon_owned_topics)
 
-            posts =
-              Post
-                .joins(
-                  "INNER JOIN #{solved_table} ON #{solved_table}.answer_post_id = posts.id",
-                )
-                .joins(:topic)
-                .joins("LEFT JOIN categories ON categories.id = topics.category_id")
-                .where(user_id: user.id, deleted_at: nil)
-                .where(topics: { archetype: Archetype.default, deleted_at: nil })
-                .where(
-                  "topics.category_id IS NULL OR NOT categories.read_restricted OR topics.category_id IN (:secure_category_ids)",
-                  secure_category_ids: guardian.secure_category_ids,
-                )
-                .where.not(id: anon_post_ids)
-                .includes(:user, topic: %i[category tags])
-                .order("#{solved_table}.created_at DESC")
-                .offset(offset)
-                .limit(limit)
+    posts = posts.where(topics: { visible: true }) unless guardian.can_see_unlisted_topics?
+    posts = guardian.filter_hidden_posts(posts)
+    posts =
+      posts.where(
+        "posts.user_id = :current_user_id OR posts.post_type IN (:visible_post_types)",
+        current_user_id: current_user&.id || Discourse.system_user.id,
+        visible_post_types: Topic.visible_post_types(current_user),
+      )
 
-            render_serialized(posts, DiscourseSolved::SolvedPostSerializer, root: "user_solved_posts")
-            return
-          end
-        end
-      rescue Discourse::NotFound
-        raise
-      rescue => e
-        Rails.logger.error("[AnonymousPost] solved by_user filter error: #{e.class}: #{e.message}\n#{e.backtrace.first(5).join("\n")}")
-        # Fall through to super on unexpected errors
-      end
-    end
+    posts =
+      posts
+        .includes(:user, topic: %i[category tags])
+        .order("discourse_solved_topic_answers.created_at DESC")
+        .offset([0, params[:offset].to_i].max)
+        .limit(params.fetch(:limit, 30).to_i)
+        .select { |post| guardian.can_see_post?(post) }
 
-    super
+    render_serialized(posts, DiscourseSolved::SolvedPostSerializer, root: "user_solved_posts")
   end
 end
 
 module AnonymousPost
   module Integration
     module Solved
+      def self.publish(type, post:, topic:, guardian:)
+        DiscourseEvent.trigger(type, post, acting_user: guardian.user)
+        MessageBus.publish(
+          "/topic/#{topic.id}",
+          {
+            type: type,
+            accepted_answers:
+              DiscourseSolved::AcceptedAnswersHelper.serialize(
+                topic.reload,
+                guardian,
+                broadcast: true,
+              ),
+          },
+          topic.secure_audience_publish_messages,
+        )
+      end
+
       def self.apply!(plugin)
         # --- discourse-solved: anonymize "accepted solution" notifications ---
         # Registered unconditionally — the event simply never fires without DiscourseSolved.
 
         plugin.on(:accepted_solution) do |post|
-          next unless SiteSetting.anonymous_post_enabled
           topic = post&.topic
           if topic && AnonymousPostHelper.anon_topic?(topic)
             anon = AnonymousPostHelper.anonymous_user
@@ -130,54 +141,32 @@ module AnonymousPost
           end
         end
 
-        # --- discourse-solved: anonymize MessageBus broadcast on answer accept ---
-        # AcceptAnswer#publish_solution broadcasts accepted_answer_post_info to ALL
-        # topic subscribers via MessageBus, bypassing all serializer patches entirely.
-        # We override publish_solution to strip real usernames before broadcasting.
+        if defined?(DiscourseSolved::AcceptedAnswersHelper)
+          DiscourseSolved::AcceptedAnswersHelper.singleton_class.prepend(AnonymousSolvedAnswersExtension)
+          DiscourseSolved::SolvedTopicsController.prepend(AnonymousSolvedTopicsExtension)
 
-        if defined?(DiscourseSolved::AcceptAnswer)
-          DiscourseSolved::AcceptAnswer.class_eval do
+          DiscourseSolved::AcceptAnswer.prepend(Module.new do
             private
 
-            alias_method :original_publish_solution, :publish_solution
-
-            def publish_solution(post:, topic:)
-              DiscourseEvent.trigger(:accepted_solution, post)
-
-              answer_info = topic.reload.accepted_answer_post_info
-
-              if SiteSetting.anonymous_post_enabled && answer_info && AnonymousPostHelper.anon_topic?(topic)
-                anon_name = AnonymousPostHelper.anon_username
-                answer_post = topic.solved&.answer_post
-
-                if answer_post && AnonymousPostHelper.anon_post_by_id?(answer_post.id)
-                  anon = AnonymousPostHelper.anonymous_user_hash
-                  answer_info =
-                    answer_info.merge(
-                      username: anon_name,
-                      name: nil,
-                      avatar_template: anon[:avatar_template],
-                    )
-                end
-
-                if SiteSetting.show_who_marked_solved
-                  accepter = topic.solved&.accepter
-                  if accepter&.id == topic.user_id
-                    answer_info = answer_info.merge(accepter_username: anon_name, accepter_name: nil)
-                  end
-                end
-              end
-
-              MessageBus.publish(
-                "/topic/#{topic.id}",
-                { type: :accepted_solution, accepted_answer: answer_info },
-                topic.secure_audience_publish_messages,
-              )
+            def publish_solution(post:, topic:, guardian:)
+              AnonymousPost::Integration::Solved.publish(:accepted_solution, post:, topic:, guardian:)
             end
-          end
-        end
+          end)
 
-        TopicViewSerializer.prepend(AnonymousSolvedJsonExtension)
+          DiscourseSolved::UnacceptAnswer.prepend(Module.new do
+            private
+
+            def publish_unaccepted(post:, topic:, guardian:)
+              AnonymousPost::Integration::Solved.publish(:unaccepted_solution, post:, topic:, guardian:)
+            end
+          end)
+
+          DiscourseSolved::SchemaUtils.singleton_class.prepend(Module.new do
+            def post_text(post)
+              super(AnonymousCrawlerPostDecorator.new(post))
+            end
+          end)
+        end
 
         # --- discourse-solved: anonymize JSON-LD structured data (QAPage schema) ---
         # DiscourseSolved::QuestionSchemaSerializer#author uses object.user directly,
@@ -189,7 +178,7 @@ module AnonymousPost
             def author
               return(
                 { "@type" => "Person", "name" => object.user&.username, "url" => object.user&.full_url }
-              ) unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_topic?(object)
+              ) unless AnonymousPostHelper.anon_topic?(object)
 
               anon_name = AnonymousPostHelper.anon_username
               { "@type" => "Person", "name" => anon_name, "url" => "#{Discourse.base_url}/u/#{anon_name}" }
@@ -205,7 +194,7 @@ module AnonymousPost
             def author
               return(
                 { "@type" => "Person", "name" => object.user&.username, "url" => object.user&.full_url }
-              ) unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+              ) unless AnonymousPostHelper.anonymous_author_post?(object)
 
               anon_name = AnonymousPostHelper.anon_username
               { "@type" => "Person", "name" => anon_name, "url" => "#{Discourse.base_url}/u/#{anon_name}" }
@@ -222,32 +211,28 @@ module AnonymousPost
           DiscourseSolved::SolvedPostSerializer.class_eval do
             alias_method :original_solved_post_username, :username
             def username
-              return original_solved_post_username unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+              return original_solved_post_username unless AnonymousPostHelper.anon_post_by_id?(object.id)
               AnonymousPostHelper.anon_username
             end
 
             alias_method :original_solved_post_name, :name
             def name
-              return original_solved_post_name unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+              return original_solved_post_name unless AnonymousPostHelper.anon_post_by_id?(object.id)
               AnonymousPostHelper.anonymous_user_hash[:name]
             end
 
             alias_method :original_solved_post_avatar_template, :avatar_template
             def avatar_template
-              return original_solved_post_avatar_template unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+              return original_solved_post_avatar_template unless AnonymousPostHelper.anon_post_by_id?(object.id)
               AnonymousPostHelper.anonymous_user_hash[:avatar_template]
             end
 
             alias_method :original_solved_post_user_id, :user_id
             def user_id
-              return original_solved_post_user_id unless SiteSetting.anonymous_post_enabled && AnonymousPostHelper.anon_post_by_id?(object.id)
+              return original_solved_post_user_id unless AnonymousPostHelper.anon_post_by_id?(object.id)
               AnonymousPostHelper.anonymous_user_hash[:id]
             end
           end
-        end
-
-        if defined?(DiscourseSolved::SolvedTopicsController)
-          DiscourseSolved::SolvedTopicsController.prepend(AnonymousSolvedTopicsExtension)
         end
       end
     end

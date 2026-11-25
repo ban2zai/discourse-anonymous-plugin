@@ -130,7 +130,6 @@ module ::AnonymousPostHelper
   end
 
   def self.mask_author?(scope, post_obj, force: false, exempt_author: true)
-    return false unless SiteSetting.anonymous_post_enabled
     return false unless post_obj
 
     unless force
@@ -179,7 +178,7 @@ module ::AnonymousPostHelper
   end
 
   def self.hide_real_author?(scope)
-    SiteSetting.anonymous_post_enabled && !(scope && can_reveal?(scope))
+    !(scope && can_reveal?(scope))
   end
 
   def self.anonymous_avatar_url(size = 45)

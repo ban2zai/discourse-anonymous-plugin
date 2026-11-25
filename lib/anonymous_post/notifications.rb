@@ -131,7 +131,7 @@ end
 
 module ::AnonymousPostAlerterExtension
   def create_notification(user, notification_type, post, opts = {})
-    if SiteSetting.anonymous_post_enabled && post
+    if post
       if AnonymousPostHelper.anonymous_author_post?(post)
         # Пост сам анонимный — анонимизируем отправителя
         AnonymousNotificationData.apply!(opts, key_style: :symbol)
@@ -165,7 +165,6 @@ module AnonymousPost
           def data
             result = original_anonymous_post_data
             return result if result.nil?
-            return result unless SiteSetting.anonymous_post_enabled
 
             was_json = result.is_a?(String)
             parsed =
@@ -203,16 +202,14 @@ module AnonymousPost
       UserCardSerializer.class_eval do
         alias_method :original_can_send_private_message_to_user, :can_send_private_message_to_user
         def can_send_private_message_to_user
-          if SiteSetting.anonymous_post_enabled
-            anon = AnonymousPostHelper.anonymous_user
-            return false if anon && object.id == anon.id
-          end
+          anon = AnonymousPostHelper.anonymous_user
+          return false if anon && object.id == anon.id
+
           original_can_send_private_message_to_user
         end
       end
 
       plugin.on(:pre_notification_alert) do |_user, payload|
-        next unless SiteSetting.anonymous_post_enabled
         next unless payload.is_a?(Hash)
 
         topic_id = payload[:topic_id] || payload["topic_id"]
@@ -242,8 +239,7 @@ module AnonymousPost
       # --- Flag PM: redirect "send message" for anonymous posts to moderators ---
 
       plugin.register_post_action_notify_user_handler(Proc.new { |user, post, message|
-        if SiteSetting.anonymous_post_enabled &&
-           post && AnonymousPostHelper.anon_post_by_id?(post.id) &&
+        if post && AnonymousPostHelper.anon_post_by_id?(post.id) &&
            !AnonymousPostHelper.can_reveal?(Guardian.new(user))
 
           anon_user = AnonymousPostHelper.anonymous_user

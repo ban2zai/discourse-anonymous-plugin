@@ -7,7 +7,6 @@ module AnonymousPost
       # Uses register_modifier to filter at SQL level, before topics.to_a is called
       # in create_list. This is more reliable than post-filtering the loaded Array.
       plugin.register_modifier(:topic_query_create_list_topics) do |topics, options, topic_query|
-        next topics unless SiteSetting.anonymous_post_enabled
         next topics unless options[:filter] == :user_topics
 
         guardian = topic_query.instance_variable_get(:@guardian)
@@ -30,8 +29,6 @@ module AnonymousPost
         alias_method :original_execute, :execute
         def execute(readonly_mode: Discourse.readonly_mode?)
           results = original_execute(readonly_mode: readonly_mode)
-          return results if !SiteSetting.anonymous_post_enabled
-
           begin
             # Detect user-scoped search: either via search_context or @username in search term
             # @clean_term is the raw unprocessed search input (set in initialize before prepare_data)

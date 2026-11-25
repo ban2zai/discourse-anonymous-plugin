@@ -10,8 +10,6 @@ module AnonymousPost
           UserReactionSerializer.class_eval do
             alias_method :original_user, :user
             def user
-              return original_user if !SiteSetting.anonymous_post_enabled
-
               reaction_user = object.user
               post = object.post
               return reaction_user unless post
@@ -42,8 +40,6 @@ module AnonymousPost
             alias_method :original_remaining_reaction_data, :remaining_reaction_data
             def remaining_reaction_data
               data = original_remaining_reaction_data
-              return data unless SiteSetting.anonymous_post_enabled
-
               topic = @post.topic
               return data unless topic
 
@@ -79,7 +75,6 @@ module AnonymousPost
             def secure_reaction_users!(reaction_users)
               result = original_secure_reaction_users!(reaction_users)
 
-              return result unless SiteSetting.anonymous_post_enabled
               return result if AnonymousPostHelper.can_reveal?(guardian)
 
               # Утечка 2: убрать реакции на анонимные посты.
@@ -106,7 +101,6 @@ module AnonymousPost
 
             alias_method :original_get_users, :get_users
             def get_users(reaction)
-              return original_get_users(reaction) if !SiteSetting.anonymous_post_enabled
               return original_get_users(reaction) if AnonymousPostHelper.can_reveal?(guardian)
 
               post = reaction.post
@@ -144,7 +138,6 @@ module AnonymousPost
 
             alias_method :original_format_like_user, :format_like_user
             def format_like_user(like)
-              return original_format_like_user(like) if !SiteSetting.anonymous_post_enabled
               return original_format_like_user(like) if AnonymousPostHelper.can_reveal?(guardian)
 
               post = like.post

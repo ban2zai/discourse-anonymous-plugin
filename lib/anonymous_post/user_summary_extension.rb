@@ -3,7 +3,6 @@
 module ::AnonymousUserSummaryExtension
   def top_replies
     results = super
-    return results if !SiteSetting.anonymous_post_enabled
     return results if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     return results if @guardian&.user&.id == @user.id
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
@@ -13,7 +12,6 @@ module ::AnonymousUserSummaryExtension
 
   def top_topics
     results = super
-    return results if !SiteSetting.anonymous_post_enabled
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
     return results if anon_ids.empty?
     results.reject { |t| anon_ids.include?(t.id) }
@@ -21,7 +19,6 @@ module ::AnonymousUserSummaryExtension
 
   def replies
     results = super
-    return results if !SiteSetting.anonymous_post_enabled
     return results if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     return results if @guardian&.user&.id == @user.id
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
@@ -31,7 +28,6 @@ module ::AnonymousUserSummaryExtension
 
   def topics
     results = super
-    return results if !SiteSetting.anonymous_post_enabled
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
     return results if anon_ids.empty?
     results.reject { |t| anon_ids.include?(t.id) }
@@ -40,7 +36,6 @@ module ::AnonymousUserSummaryExtension
   # Issue 1: hide links posted while anonymous
   def links
     results = super
-    return results if !SiteSetting.anonymous_post_enabled
     return results if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
     return results if anon_ids.empty?
@@ -49,7 +44,6 @@ module ::AnonymousUserSummaryExtension
 
   # Issue 2: hide "most active respondents" from anonymous topics
   def most_replied_to_users
-    return super if !SiteSetting.anonymous_post_enabled
     return super if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
     return super if anon_ids.empty?
@@ -79,7 +73,6 @@ module ::AnonymousUserSummaryExtension
 
   # Issue 2: hide "fans / most liked by" from anonymous topics
   def most_liked_by_users
-    return super if !SiteSetting.anonymous_post_enabled
     return super if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
     return super if anon_ids.empty?
@@ -107,7 +100,6 @@ module ::AnonymousUserSummaryExtension
   # NOTE: Discourse method is top_categories, not categories
   def top_categories
     results = super
-    return results if !SiteSetting.anonymous_post_enabled
     return results if @guardian && AnonymousPostHelper.can_reveal?(@guardian)
     anon_ids = AnonymousPostHelper.anon_topic_ids_for_user(@user.id)
     return results if anon_ids.empty?

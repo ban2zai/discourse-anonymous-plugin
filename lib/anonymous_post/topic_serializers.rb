@@ -28,8 +28,6 @@ end
 module ::AnonymousTopicListRssExtension
   def topics
     result = super
-    return result unless SiteSetting.anonymous_post_enabled
-
     topics_array = Array(result)
     return result if topics_array.empty?
 
@@ -65,8 +63,7 @@ module AnonymousPost
 
       plugin.add_to_serializer(:topic_view, :user_id) do
         topic = object.topic
-        if SiteSetting.anonymous_post_enabled &&
-           AnonymousPostHelper.anon_topic?(topic) &&
+        if AnonymousPostHelper.anon_topic?(topic) &&
            !AnonymousPostHelper.can_reveal?(scope) &&
            scope.user&.id != topic.user_id
           nil
@@ -80,7 +77,6 @@ module AnonymousPost
       TopicViewDetailsSerializer.class_eval do
         alias_method :original_created_by, :created_by
         def created_by
-          return original_created_by if !SiteSetting.anonymous_post_enabled
           topic = object.topic
           if AnonymousPostHelper.anon_topic?(topic) &&
              !AnonymousPostHelper.can_reveal?(scope) &&
@@ -93,7 +89,6 @@ module AnonymousPost
 
         alias_method :original_last_poster, :last_poster
         def last_poster
-          return original_last_poster if !SiteSetting.anonymous_post_enabled
           topic = object.topic
           if !AnonymousPostHelper.can_reveal?(scope)
             should_anonymize = false
@@ -119,7 +114,6 @@ module AnonymousPost
 
         alias_method :original_participants, :participants
         def participants
-          return original_participants if !SiteSetting.anonymous_post_enabled
           topic = object.topic
           return original_participants if AnonymousPostHelper.can_reveal?(scope)
           return original_participants unless AnonymousPostHelper.anon_topic?(topic)
@@ -159,7 +153,6 @@ module AnonymousPost
         alias_method :original_posters, :posters
         def posters
           result = original_posters
-          return result if !SiteSetting.anonymous_post_enabled
           return result if AnonymousPostHelper.can_reveal?(scope)
 
           topic = object

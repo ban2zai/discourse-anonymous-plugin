@@ -28,6 +28,12 @@ class ::AnonymousCrawlerPostDecorator < SimpleDelegator
   end
 end
 
+class ::AnonymousCrawlerPosts < Array
+  def ids
+    map(&:id)
+  end
+end
+
 module ::AnonymousCrawlerTopicViewExtension
   def enable_anonymous_crawler_mask!
     @anonymous_crawler_mask = true
@@ -39,7 +45,7 @@ module ::AnonymousCrawlerTopicViewExtension
 
   def posts
     result = super
-    return result unless SiteSetting.anonymous_post_enabled && anonymous_crawler_mask?
+    return result unless anonymous_crawler_mask?
 
     posts_array = result.to_a
     return result if posts_array.empty?
@@ -50,7 +56,7 @@ module ::AnonymousCrawlerTopicViewExtension
 
     anon_user = AnonymousPostHelper.anonymous_user || AnonymousPostHelper.anonymous_user_object
 
-    posts_array.map do |post|
+    posts_array = posts_array.map do |post|
       if anon_post_ids.include?(post.id)
         AnonymousCrawlerPostDecorator.new(post, anon_user)
       elsif post.cooked.to_s.include?("aside")
@@ -59,13 +65,13 @@ module ::AnonymousCrawlerTopicViewExtension
         post
       end
     end
+    AnonymousCrawlerPosts.new(posts_array)
   end
 end
 
 module ::AnonymousCrawlerTopicsControllerExtension
   def perform_show_response(*args, **kwargs, &block)
-    if SiteSetting.anonymous_post_enabled &&
-       @topic_view &&
+    if @topic_view &&
        respond_to?(:use_crawler_layout?, true) &&
        use_crawler_layout? &&
        AnonymousPostHelper.hide_real_author?(guardian)

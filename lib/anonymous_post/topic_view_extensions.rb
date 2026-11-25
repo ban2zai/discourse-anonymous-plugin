@@ -23,8 +23,6 @@ end
 module ::AnonymousTopicViewRssExtension
   def recent_posts
     posts = super
-    return posts unless SiteSetting.anonymous_post_enabled
-
     posts_array = posts.to_a
     return posts_array if posts_array.empty?
 
@@ -56,7 +54,7 @@ end
 
 module ::AnonymousTopicViewExtension
   def page_title
-    return super unless SiteSetting.anonymous_post_enabled && @post_number > 1
+    return super unless @post_number > 1
 
     post = @topic.posts.find_by(post_number: @post_number)
     return super unless post

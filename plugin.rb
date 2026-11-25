@@ -9,8 +9,6 @@
   register_asset "stylesheets/anonymous-post/#{layout}.scss", layout
 end
 
-enabled_site_setting :anonymous_post_enabled
-
 after_initialize do
   register_svg_icon "ghost"
   add_permitted_post_create_param(:is_anonymous_post)
@@ -33,6 +31,7 @@ after_initialize do
   %w[
     helper
     post_creation_handler
+    topic_events
     post_serializers
     raw_endpoints
     crawler_extension
@@ -50,9 +49,9 @@ after_initialize do
     integration/solved
   ].each { |f| require_relative "lib/anonymous_post/#{f}" }
 
-  on(:post_created) { |post, opts| AnonymousPost::PostCreationHandler.handle(post, opts) }
-
   [
+    AnonymousPost::PostCreationHandler,
+    AnonymousPost::TopicEvents,
     AnonymousPost::PostSerializers,
     AnonymousPost::RawEndpoints,
     AnonymousPost::CrawlerExtension,

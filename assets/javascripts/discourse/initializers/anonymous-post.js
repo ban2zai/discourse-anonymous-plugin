@@ -1,9 +1,11 @@
 import { apiInitializer } from "discourse/lib/api";
 import { iconHTML } from "discourse/lib/icon-library";
 import { i18n } from "discourse-i18n";
-import AnonymousPostCheckbox from "../components/anonymous-post-checkbox";
+import AnonymousPostCheckbox, {
+  isAnonymousReply,
+} from "../components/anonymous-post-checkbox.gjs";
 
-export default apiInitializer("0.4.0", (api) => {
+export default apiInitializer((api) => {
   api.serializeOnCreate("is_anonymous_post");
   api.addTrackedPostProperties("is_anonymous_post");
 
@@ -16,24 +18,24 @@ export default apiInitializer("0.4.0", (api) => {
   styleEl.textContent = `.anon-post-indicator .d-icon, .anon-topic-icon .d-icon { color: ${ghostColor} !important; }`;
   document.head.appendChild(styleEl);
 
-  if (api.container.hasRegistration?.("service:composer-presence-manager")) {
-    api.modifyClass("service:composer-presence-manager", {
-      pluginId: "discourse-anonymous-plugin",
+  api.modifyClass(
+    "service:composer-presence-manager",
+    (Superclass) =>
+      class extends Superclass {
+        notifyState(...args) {
+          const model = api.container.lookup("service:composer")?.model;
+          if (
+            model?.get("is_anonymous_post") ||
+            isAnonymousReply(model, this.currentUser)
+          ) {
+            this.leave();
+            return;
+          }
 
-      notifyState() {
-        const model = this.composer?.model || this.model || this.currentComposer?.model;
-        const isAnonymousPost =
-          model?.is_anonymous_post || model?.get?.("is_anonymous_post");
-
-        if (isAnonymousPost) {
-          this.leave?.();
-          return;
+          return super.notifyState(...args);
         }
-
-        return this._super?.(...arguments);
       },
-    });
-  }
+  );
 
   api.addPostClassesCallback((attrs) => {
     return attrs.is_anonymous_post ? ["is-anonymous-post"] : [];
@@ -57,7 +59,9 @@ export default apiInitializer("0.4.0", (api) => {
   api.onPageChange((url) => {
     // Ghost icon for anonymous topics in topic list
     document.querySelectorAll("tr.is-anonymous-topic").forEach((row) => {
-      if (row.querySelector(".anon-topic-icon")) return;
+      if (row.querySelector(".anon-topic-icon")) {
+        return;
+      }
       const titleLink = row.querySelector(".link-top-line a.title");
       if (titleLink) {
         const icon = document.createElement("span");

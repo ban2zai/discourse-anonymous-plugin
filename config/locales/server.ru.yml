@@ -1,7 +1,11 @@
 ru:
+  anonymous_post_new_topics_disabled: "Создание новых анонимных тем выключено."
+  anonymous_post_category_not_allowed: "В этой категории нельзя создавать анонимные темы."
+  anonymous_post_reply_not_allowed: "Анонимно отвечать можно только в своей анонимной теме."
+  anonymous_post_save_failed: "Не удалось сохранить анонимность. Публикация отменена."
   site_settings:
-    anonymous_post_enabled: "Включить анонимные публикации"
-    anonymous_post_allowed_categories: "Категории, в которых разрешены анонимные публикации (пусто = отключено)"
+    anonymous_post_enabled: "Разрешить создание новых анонимных тем"
+    anonymous_post_allowed_categories: "Категории, в которых можно создавать анонимные темы (пусто = отключено)"
     anonymous_post_reveal_groups: "Группы, которые могут видеть авторов анонимных публикаций"
     anonymous_post_ghost_color: "Цвет иконки призрака для анонимных публикаций"
     anonymous_post_user: "Имя пользователя для отображения в анонимных публикациях"

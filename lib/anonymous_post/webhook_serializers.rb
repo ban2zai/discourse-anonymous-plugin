@@ -9,7 +9,7 @@ module ::AnonymousWebHookTopicViewSerializerHelpers
 
   def anonymous_webhook_topic?
     topic = anonymous_webhook_topic
-    SiteSetting.anonymous_post_enabled && topic && AnonymousPostHelper.anon_topic?(topic)
+    topic && AnonymousPostHelper.anon_topic?(topic)
   end
 end
 
@@ -32,7 +32,7 @@ module AnonymousPost
           alias_method :original_anonymous_webhook_last_poster, :last_poster
           def last_poster
             topic = anonymous_webhook_topic
-            return original_anonymous_webhook_last_poster unless SiteSetting.anonymous_post_enabled && topic
+            return original_anonymous_webhook_last_poster unless topic
 
             last_post = topic.posts.order(post_number: :desc).first
             if AnonymousPostHelper.anonymous_author_post?(last_post, topic)

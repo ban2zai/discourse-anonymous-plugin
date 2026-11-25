@@ -13,7 +13,6 @@ module AnonymousPost
 
         alias_method :original_basic_username, :username
         def username
-          return original_basic_username if !SiteSetting.anonymous_post_enabled
           if AnonymousPostHelper.mask_author?(scope, object, force: anonymous_force_mask?)
             AnonymousPostHelper.anon_username
           else
@@ -23,7 +22,6 @@ module AnonymousPost
 
         alias_method :original_basic_name, :name
         def name
-          return original_basic_name if !SiteSetting.anonymous_post_enabled
           if AnonymousPostHelper.mask_author?(scope, object, force: anonymous_force_mask?)
             I18n.t("js.anonymous_post.anonymous_name")
           else
@@ -33,7 +31,6 @@ module AnonymousPost
 
         alias_method :original_basic_avatar_template, :avatar_template
         def avatar_template
-          return original_basic_avatar_template if !SiteSetting.anonymous_post_enabled
           if AnonymousPostHelper.mask_author?(scope, object, force: anonymous_force_mask?)
             AnonymousPostHelper.anonymous_user&.avatar_template || AnonymousPostHelper::ANON_AVATAR_FALLBACK
           else
@@ -67,9 +64,6 @@ module AnonymousPost
       end
 
       # --- BasicPostSerializer: anonymize quoted usernames in cooked HTML ---
-      # NOTE: Using class_eval+alias_method (not add_to_serializer) to avoid Discourse's
-      # plugin-enabled gating, which would exclude `cooked` from JSON when plugin is
-      # disabled in admin, causing toc-processor.js to crash with undefined.includes().
 
       BasicPostSerializer.class_eval do
         alias_method :_original_cooked, :cooked
@@ -119,7 +113,6 @@ module AnonymousPost
       PostRevisionSerializer.class_eval do
         alias_method :original_username, :username
         def username
-          return original_username if !SiteSetting.anonymous_post_enabled
           post = Post.find_by(id: object.post_id)
           if AnonymousPostHelper.mask_author?(scope, post, exempt_author: false)
             AnonymousPostHelper.anonymous_user&.username || AnonymousPostHelper.anon_username
@@ -130,7 +123,6 @@ module AnonymousPost
 
         alias_method :original_display_username, :display_username
         def display_username
-          return original_display_username if !SiteSetting.anonymous_post_enabled
           post = Post.find_by(id: object.post_id)
           if AnonymousPostHelper.mask_author?(scope, post, exempt_author: false)
             AnonymousPostHelper.anonymous_user&.name || I18n.t("js.anonymous_post.anonymous_name")
@@ -141,7 +133,6 @@ module AnonymousPost
 
         alias_method :original_avatar_template, :avatar_template
         def avatar_template
-          return original_avatar_template if !SiteSetting.anonymous_post_enabled
           post = Post.find_by(id: object.post_id)
           if AnonymousPostHelper.mask_author?(scope, post, exempt_author: false)
             AnonymousPostHelper.anonymous_user&.avatar_template || AnonymousPostHelper::ANON_AVATAR_FALLBACK
