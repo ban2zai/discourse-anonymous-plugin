@@ -5,7 +5,7 @@
 # bypassing all serializer patches. We wrap anonymous posts in a decorator
 # that returns the anonymous user instead, using a single batch DB query.
 
-class ::AnonymousRssPostDecorator < SimpleDelegator
+class ::AnonymousPostUserDecorator < SimpleDelegator
   def initialize(post, anon_user = nil)
     super(post)
     @anon_user = anon_user
@@ -14,7 +14,9 @@ class ::AnonymousRssPostDecorator < SimpleDelegator
   def user
     @anon_user || __getobj__.user
   end
+end
 
+class ::AnonymousRssPostDecorator < AnonymousPostUserDecorator
   def cooked
     AnonymousPostHelper.anonymize_cooked_quotes(__getobj__.cooked)
   end
@@ -53,6 +55,10 @@ end
 # anonymous posts and anonymous topic owners.
 
 module ::AnonymousTopicViewExtension
+  def links
+    @anonymous_post_links ||= links_with_safe_attribution(super)
+  end
+
   def page_title
     return super unless @post_number > 1
 
@@ -89,6 +95,46 @@ module ::AnonymousTopicViewExtension
     end
 
     title
+  end
+
+  private
+
+  def links_with_safe_attribution(links)
+    return links if links.blank? || AnonymousPostHelper.can_reveal?(@guardian)
+
+    viewer_id = @guardian.user&.id
+    user_ids = links.filter_map { |link| link.user_id unless link.user_id == viewer_id }
+    return links if user_ids.empty?
+
+    stored_links = TopicLink.where(topic_id: @topic.id, url: links.map(&:url), user_id: user_ids).to_a
+    links_by_key = stored_links.group_by { |link| attribution_key(link) }
+    post_ids = stored_links.filter_map { |link| attribution_post_id(link) }
+    posts = Post.with_deleted.where(id: post_ids).select(:id, :user_id, :topic_id).index_by(&:id)
+    anonymous_ids = AnonymousPostHelper.anonymous_author_post_ids(posts.values)
+
+    links.map do |link|
+      next link if link.user_id.nil? || link.user_id == viewer_id
+
+      sources = links_by_key[attribution_key(link)]
+      omit_user_id = sources.blank? ||
+        sources.any? do |source|
+          post = posts[attribution_post_id(source)]
+          !post || post.user_id != source.user_id || anonymous_ids.include?(post.id)
+        end
+      if omit_user_id
+        link.dup.tap { |result| result.user_id = nil }
+      else
+        link
+      end
+    end
+  end
+
+  def attribution_key(link)
+    [link.url, link.user_id, link.reflection, link.internal, link.domain, link.link_topic_id]
+  end
+
+  def attribution_post_id(link)
+    link.reflection ? link.link_post_id : link.post_id
   end
 end
 

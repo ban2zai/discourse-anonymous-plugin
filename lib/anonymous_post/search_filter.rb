@@ -23,6 +23,13 @@ module AnonymousPost
         )
       end
 
+      user_filter = Search.advanced_filters.fetch(/\Auser:(.+)\z/i)
+      original_user_filter = user_filter.fetch(:block)
+      user_filter[:block] = proc do |posts, match|
+        filtered_posts = instance_exec(posts, match, &original_user_filter) || posts
+        AnonymousPostHelper.without_anonymous_authors(filtered_posts, @guardian)
+      end
+
       # --- Search: exclude anonymous posts from @username searches ---
 
       Search.class_eval do

@@ -181,15 +181,34 @@ module ::AnonymousPostHelper
     !(scope && can_reveal?(scope))
   end
 
+  def self.without_anonymous_authors(posts, scope)
+    return posts unless hide_real_author?(scope)
+
+    posts.where(<<~SQL, viewer_id: scope&.user&.id)
+      posts.user_id = :viewer_id OR (
+        NOT EXISTS (
+          SELECT 1 FROM post_custom_fields
+          WHERE post_id = posts.id AND name = 'is_anonymous_post' AND value = '1'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM topic_custom_fields
+          INNER JOIN topics AS anonymous_topics ON anonymous_topics.id = topic_custom_fields.topic_id
+          WHERE anonymous_topics.id = posts.topic_id AND anonymous_topics.user_id = posts.user_id
+            AND topic_custom_fields.name = 'is_anonymous_topic' AND topic_custom_fields.value = '1'
+        )
+      )
+    SQL
+  end
+
   def self.anonymous_avatar_url(size = 45)
     (anonymous_user&.avatar_template || ANON_AVATAR_FALLBACK).gsub("{size}", size.to_s)
   end
 
-  def self.anonymize_raw_quotes(text)
+  def self.anonymize_raw_quotes(text, targets: nil)
     return text unless text.respond_to?(:include?) && text.respond_to?(:gsub)
     return text if text.blank? || !text.include?("[quote=")
 
-    targets = anon_quote_targets(raw_quote_pairs(text))
+    targets ||= anon_quote_targets(raw_quote_pairs(text))
     return text if targets.empty?
 
     text.gsub(RAW_QUOTE_PATTERN) do |match|

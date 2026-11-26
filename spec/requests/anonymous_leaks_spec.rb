@@ -7,6 +7,8 @@ describe "anonymous post leak endpoints", type: :request do
   fab!(:author) { Fabricate(:user, username: "doskochda", name: "DoskochDA") }
   fab!(:viewer) { Fabricate(:user, username: "regularviewer") }
   fab!(:admin) { Fabricate(:admin) }
+  fab!(:reveal_group, :group)
+  fab!(:revealer) { Fabricate(:user).tap { |user| reveal_group.add(user) } }
   fab!(:category)
 
   before do
@@ -119,6 +121,65 @@ describe "anonymous post leak endpoints", type: :request do
   end
 
   describe "raw markdown endpoints" do
+    it "маскирует подписи и цитаты в Markdown всей темы" do
+      topic, first_post, quoting_post = anonymous_topic_with_quote
+      legacy_post = fabricate_post(topic: topic, user: author, post_number: 3)
+      SiteSetting.anonymous_post_enabled = false
+      sign_in(viewer)
+
+      get "/raw/#{topic.id}"
+      expect(response).to have_http_status(:ok)
+      expect_anonymous_body
+      expect(response.body).to include(
+        "#{anon_user.username} | #{first_post.updated_at} | #1",
+        "#{viewer.username} | #{quoting_post.updated_at} | #2",
+        "#{anon_user.username} | #{legacy_post.updated_at} | #3",
+        %([quote="#{anon_user.username}, post:1, topic:#{topic.id}"]),
+      )
+
+      stub_const(PostsController, :MARKDOWN_TOPIC_PAGE_SIZE, 2) do
+        get "/raw/#{topic.id}", params: { page: 2 }
+        expect(response).to have_http_status(:ok)
+        expect(response.body).to include("#{anon_user.username} | #{legacy_post.updated_at} | #3")
+        expect(response.body).not_to include(" | #1")
+      end
+
+      sign_in(author)
+      get "/raw/#{topic.id}"
+      expect(response.body).to include("#{author.username} | #{first_post.updated_at} | #1")
+
+      SiteSetting.anonymous_post_reveal_groups = reveal_group.id.to_s
+      sign_in(revealer)
+      get "/raw/#{topic.id}"
+      expect(response.body).to include(%([quote="#{author.username}, post:1, topic:#{topic.id}"]))
+    end
+
+    it "маскирует профиль, аватар и цитату в штатном Markdown" do
+      SiteSetting.enable_markdown_endpoints = true
+      topic, _first_post, _quoting_post = anonymous_topic_with_quote
+      path = "/t/#{topic.slug}/#{topic.id}.md"
+      sign_in(viewer)
+
+      get path
+      expect(response).to have_http_status(:ok)
+      expect(response.media_type).to eq("text/markdown")
+      expect_anonymous_body
+      expect(response.body).to include(
+        anon_user.full_url,
+        anon_user.avatar_template.gsub("{size}", "32"),
+        viewer.full_url,
+        "Quoted text",
+      )
+      expect(response.body).not_to include(
+        author.full_url,
+        author.avatar_template.gsub("{size}", "32"),
+      )
+
+      sign_in(admin)
+      get path
+      expect(response.body).to include(author.full_url)
+    end
+
     it "anonymizes quote headers on /raw/:topic_id/:post_number for regular users" do
       topic, _first_post, quoting_post = anonymous_topic_with_quote
       sign_in(viewer)
@@ -147,6 +208,143 @@ describe "anonymous post leak endpoints", type: :request do
 
       expect(response.status).to eq(200)
       expect(response.body).to include(author.username)
+    end
+  end
+
+  describe "поиск по автору" do
+    it "фильтрует анонимные результаты до группировки темы" do
+      public_topic = Fabricate(:topic, user: author, category: category)
+      anonymous_first = fabricate_post(topic: public_topic, user: author, post_number: 1)
+      mark_anonymous_post(anonymous_first)
+      named_reply = fabricate_post(topic: public_topic, user: author, post_number: 2)
+      anonymous_topic = Fabricate(:topic, user: author, category: category)
+      mark_anonymous_topic(anonymous_topic)
+      legacy_post = fabricate_post(topic: anonymous_topic, user: author, post_number: 1)
+      with_search_indexer_enabled do
+        [anonymous_first, named_reply, legacy_post].each { |post| SearchIndexer.index(post, force: true) }
+      end
+
+      sign_in(viewer)
+      [author.username, author.id].each do |identifier|
+        get "/search.json", params: { q: "user:#{identifier}" }
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body.fetch("posts").pluck("id")).to eq([named_reply.id])
+      end
+
+      get "/search.json", params: { q: "@#{author.username}" }
+      expect(response).to have_http_status(:ok)
+      expect(Array(response.parsed_body["posts"]).pluck("id")).not_to include(anonymous_first.id, legacy_post.id)
+
+      sign_in(author)
+      get "/search.json", params: { q: "user:#{author.username}" }
+      expect(response.parsed_body.fetch("posts").pluck("id")).to include(legacy_post.id)
+
+      SiteSetting.anonymous_post_reveal_groups = reveal_group.id.to_s
+      sign_in(revealer)
+      get "/search.json", params: { q: "user:#{author.id}" }
+      expect(response.parsed_body.fetch("posts").pluck("id")).to include(legacy_post.id)
+    end
+  end
+
+  describe "лента чужого профиля" do
+    it "исключает анонимные посты из JSON и RSS до лимита" do
+      public_topic = Fabricate(:topic, user: author, category: category)
+      public_post = fabricate_post(topic: public_topic, user: author, post_number: 1)
+      public_post.update_columns(created_at: 2.days.ago)
+      explicit = fabricate_post(topic: public_topic, user: author, post_number: 2)
+      mark_anonymous_post(explicit)
+      anonymous_topic = Fabricate(:topic, user: author, category: category)
+      mark_anonymous_topic(anonymous_topic)
+      legacy_post = fabricate_post(topic: anonymous_topic, user: author, post_number: 1)
+      timestamp = 1.day.ago
+      Post.insert_all!(
+        (2..51).map do |number|
+          {
+            topic_id: anonymous_topic.id,
+            user_id: author.id,
+            post_number: number,
+            raw: "Скрытый пост",
+            cooked: "<p>Скрытый пост</p>",
+            post_type: Post.types[:regular],
+            created_at: timestamp,
+            updated_at: timestamp,
+            last_version_at: timestamp,
+          }
+        end,
+      )
+
+      sign_in(viewer)
+      get "/u/#{author.username}/activity.json"
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.pluck("id")).to eq([public_post.id])
+
+      get "/u/#{author.username}/activity.rss"
+      expect(response).to have_http_status(:ok)
+      expect(Nokogiri::XML(response.body).xpath("//item/link").map(&:text)).to eq([public_post.full_url])
+
+      SiteSetting.anonymous_post_reveal_groups = reveal_group.id.to_s
+      [author, revealer].each do |reader|
+        sign_in(reader)
+        get "/u/#{author.username}/activity.json"
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body.pluck("id")).to include(explicit.id, legacy_post.id)
+      end
+    end
+  end
+
+  describe "авторы ссылок в теме" do
+    it "скрывает ID для прямой и обратной ссылок из анонимного поста" do
+      source_topic = Fabricate(:topic, user: author, category: category)
+      mark_anonymous_topic(source_topic)
+      source = fabricate_post(topic: source_topic, user: author, post_number: 1)
+      visible = fabricate_post(topic: source_topic, user: revealer, post_number: 2)
+      destination = Fabricate(:topic, user: viewer, category: category)
+      target = fabricate_post(topic: destination, user: viewer, post_number: 1)
+
+      direct = TopicLink.create!(
+        topic: source_topic, post: source, user: author,
+        url: "https://example.com/anonymous", domain: "example.com", clicks: 4,
+      )
+      named = TopicLink.create!(
+        topic: source_topic, post: visible, user: revealer,
+        url: "https://example.com/named", domain: "example.com", clicks: 2,
+      )
+      reflected = TopicLink.create!(
+        topic: destination, post: target, user: author, link_topic: source_topic, link_post: source,
+        url: source.full_url, domain: Discourse.current_hostname, clicks: 1, reflection: true, internal: true,
+      )
+      unattributed = TopicLink.create!(
+        topic: destination, post: target, user: author, link_topic: source_topic,
+        url: "#{source.full_url}?legacy=1", domain: Discourse.current_hostname,
+        clicks: 2, reflection: true, internal: true,
+      )
+
+      sign_in(viewer)
+      source_path = "/t/#{source_topic.slug}/#{source_topic.id}"
+      get "#{source_path}.json"
+      expect(response).to have_http_status(:ok)
+      links = response.parsed_body.dig("details", "links")
+      expect(links.pluck("url", "clicks")).to eq([[direct.url, 4], [named.url, 2]])
+      expect(links.first).not_to have_key("user_id")
+      expect(links.last.fetch("user_id")).to eq(revealer.id)
+
+      get source_path
+      preload = JSON.parse(Nokogiri::HTML(response.body).at_css("#data-preloaded").text)
+      html_links = JSON.parse(preload.fetch("topic_#{source_topic.id}")).dig("details", "links")
+      expect(html_links).to eq(links)
+
+      destination_path = "/t/#{destination.slug}/#{destination.id}.json"
+      get destination_path
+      destination_links = response.parsed_body.dig("details", "links")
+      expect(destination_links.pluck("url", "clicks")).to eq([[unattributed.url, 2], [reflected.url, 1]])
+      destination_links.each { |link| expect(link).not_to have_key("user_id") }
+
+      SiteSetting.anonymous_post_reveal_groups = reveal_group.id.to_s
+      [author, revealer].each do |reader|
+        sign_in(reader)
+        get destination_path
+        expect(response.parsed_body.dig("details", "links").pluck("user_id")).to eq([author.id, author.id])
+      end
     end
   end
 
